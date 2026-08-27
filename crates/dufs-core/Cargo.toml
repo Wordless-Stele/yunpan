@@ -56,3 +56,7 @@ hex = "0.4.3"
 [features]
 default = ["tls"]
 tls = ["tokio-rustls"]
+
+[dev-dependencies]
+base64 = "0.22"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "time"] }
