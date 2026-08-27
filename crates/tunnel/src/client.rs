@@ -6,6 +6,7 @@
 use crate::protocol::{
     read_msg, sign, write_msg, ClientMsg, Role, ServerMsg, PROTO_VERSION,
 };
+use crate::tls::{make_connector, server_name, BoxStream};
 use anyhow::{bail, Context, Result};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -32,9 +33,12 @@ pub struct ClientConfig {
     pub remote_port: u16,
     /// 本机 dufs 监听的端口。
     pub local_port: u16,
-    /// 本机 dufs 是否开了 HTTPS。只影响公网地址显示成 http 还是 https——
-    /// 中继转发的本来就是裸字节，TLS 与否它无感。
-    pub https: bool,
+    /// 与中继之间走 TLS（要求中继已配证书）。开着时访客侧同样是 HTTPS，
+    /// 公网地址显示为 https://。客户端侧不需要任何证书文件——系统根证书验中继域名。
+    pub tls: bool,
+    /// 额外信任的证书（DER）。给自签证书的中继用（联调/内网）；正经 certbot
+    /// 证书用不着，界面上也不暴露。
+    pub extra_trust_der: Option<Vec<u8>>,
 }
 
 /// 中继连接的当前状态。界面上的托盘图标与状态条都读它。
@@ -167,8 +171,7 @@ async fn session(
     stats: &Arc<ClientStats>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
-    let addr = format!("{}:{}", cfg.relay_host, cfg.control_port);
-    let mut stream = timeout(&addr).await?;
+    let mut stream = connect_relay(cfg).await?;
     let role = Role::Control {
         client_id: cfg.client_id.clone(),
     };
@@ -195,7 +198,8 @@ async fn session(
         match msg {
             ServerMsg::Ping { ts } => write_msg(&mut stream, &ClientMsg::Pong { ts }).await?,
             ServerMsg::BindOk { remote_port, .. } => {
-                let scheme = if cfg.https { "https" } else { "http" };
+                // 中继的 TLS 是全端口一把闸：隧道走 TLS，访客那头就必然是 HTTPS
+                let scheme = if cfg.tls { "https" } else { "http" };
                 let public_url = format!("{scheme}://{}:{}", cfg.relay_host, remote_port);
                 log::info!("中继已打通：{public_url}");
                 let _ = status_tx.send(RelayStatus::Online { public_url });
@@ -222,18 +226,36 @@ async fn session(
     }
 }
 
-async fn timeout(addr: &str) -> Result<TcpStream> {
-    tokio::time::timeout(
+/// 连上中继：TCP，配置了就再套一层 TLS（SNI 与证书校验都按 `relay_host`）。
+async fn connect_relay(cfg: &ClientConfig) -> Result<BoxStream> {
+    let addr = format!("{}:{}", cfg.relay_host, cfg.control_port);
+    let tcp = tokio::time::timeout(
         Duration::from_secs(CONNECT_TIMEOUT_SECS),
-        TcpStream::connect(addr),
+        TcpStream::connect(&addr),
     )
     .await
     .with_context(|| format!("连接中继 {addr} 超时"))?
-    .with_context(|| format!("连接中继 {addr} 失败"))
+    .with_context(|| format!("连接中继 {addr} 失败"))?;
+
+    if !cfg.tls {
+        return Ok(Box::new(tcp));
+    }
+    let connector = make_connector(cfg.extra_trust_der.as_deref())?;
+    let name = server_name(&cfg.relay_host)?;
+    let stream = tokio::time::timeout(
+        Duration::from_secs(CONNECT_TIMEOUT_SECS),
+        connector.connect(name, tcp),
+    )
+    .await
+    .with_context(|| "TLS 握手超时")?
+    .with_context(|| {
+        "TLS 握手失败——中继可能没配证书，或证书与填的域名对不上；         中继确实没开 TLS 的话，把「加密连接」关掉"
+    })?;
+    Ok(Box::new(stream))
 }
 
 /// 挑战-应答握手。控制连接和数据连接走的是同一套，区别只在 [`Role`]。
-async fn handshake(stream: &mut TcpStream, cfg: &ClientConfig, role: &Role) -> Result<()> {
+async fn handshake(stream: &mut BoxStream, cfg: &ClientConfig, role: &Role) -> Result<()> {
     write_msg(
         stream,
         &ClientMsg::Hello {
@@ -270,8 +292,7 @@ async fn handshake(stream: &mut TcpStream, cfg: &ClientConfig, role: &Role) -> R
 
 /// 一条访客连接：向中继回连一条数据连接，另一头接本机 dufs，然后对着倒字节。
 async fn serve_conn(cfg: &ClientConfig, conn_id: u64, stats: &Arc<ClientStats>) -> Result<()> {
-    let addr = format!("{}:{}", cfg.relay_host, cfg.control_port);
-    let mut relay = timeout(&addr).await?;
+    let mut relay = connect_relay(cfg).await?;
     let role = Role::Data {
         client_id: cfg.client_id.clone(),
         conn_id,

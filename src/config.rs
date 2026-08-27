@@ -23,9 +23,6 @@ pub struct AppConfig {
     pub auth_user: String,
     pub auth_pass: String,
     pub guest_readonly: bool,
-    /// HTTPS 证书与私钥的路径。都非空才启用——dufs 只收成对的。
-    pub tls_cert: String,
-    pub tls_key: String,
     pub relay: RelaySettings,
 }
 
@@ -41,6 +38,9 @@ pub struct RelaySettings {
     pub token: String,
     /// 想占用的中继公网端口，需在中继侧白名单里。
     pub remote_port: u16,
+    /// 与中继之间走 TLS（中继配了证书就开着）。开着时访客侧就是正经 HTTPS，
+    /// 客户端不需要任何证书文件。
+    pub tls: bool,
 }
 
 impl Default for AppConfig {
@@ -56,8 +56,6 @@ impl Default for AppConfig {
             auth_user: String::new(),
             auth_pass: String::new(),
             guest_readonly: true,
-            tls_cert: String::new(),
-            tls_key: String::new(),
             relay: RelaySettings::default(),
         }
     }
@@ -72,6 +70,8 @@ impl Default for RelaySettings {
             client_id: String::new(),
             token: String::new(),
             remote_port: 8080,
+            // 默认开：正经部署中继都该有证书；内网联调再手动关
+            tls: true,
         }
     }
 }
@@ -109,10 +109,6 @@ impl AppConfig {
         !self.auth_user.trim().is_empty() && !self.auth_pass.trim().is_empty()
     }
 
-    /// HTTPS 是否启用（证书和私钥都选了才算）。
-    pub fn tls_enabled(&self) -> bool {
-        !self.tls_cert.trim().is_empty() && !self.tls_key.trim().is_empty()
-    }
 
     /// 翻译成 dufs 的配置 YAML。
     pub fn to_dufs_yaml(&self) -> String {
@@ -129,10 +125,6 @@ impl AppConfig {
             allow_archive: bool,
             #[serde(skip_serializing_if = "Vec::is_empty")]
             auth: Vec<String>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            tls_cert: Option<String>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            tls_key: Option<String>,
         }
 
         let mut auth = vec![];
@@ -157,10 +149,6 @@ impl AppConfig {
             allow_search: self.allow_search,
             allow_archive: self.allow_archive,
             auth,
-            // 只有一半就当没配——半套证书 dufs 会直接拒绝启动，
-            // 界面上另有提示，不让用户莫名其妙启动失败
-            tls_cert: self.tls_enabled().then(|| self.tls_cert.trim().to_string()),
-            tls_key: self.tls_enabled().then(|| self.tls_key.trim().to_string()),
         };
         serde_yaml::to_string(&doc).expect("配置镜像结构必然可序列化")
     }
@@ -183,7 +171,8 @@ impl AppConfig {
             name: "dufs".to_string(),
             remote_port: r.remote_port,
             local_port: self.port,
-            https: self.tls_enabled(),
+            tls: r.tls,
+            extra_trust_der: None,
         })
     }
 }
@@ -218,32 +207,16 @@ mod tests {
     }
 
     #[test]
-    fn 选好证书和私钥后_yaml_里有成对的_tls_配置() {
+    fn 本地_dufs_一律明文_yaml_里不出现_tls() {
+        // TLS 终结在中继：本地 dufs 只服务 127.0.0.1/局域网，明文即可
         let mut cfg = AppConfig::default();
         cfg.serve_path = std::env::temp_dir().to_string_lossy().to_string();
-        cfg.tls_cert = "/tmp/cert.pem".into();
-        cfg.tls_key = "/tmp/key.pem".into();
-        let yaml = cfg.to_dufs_yaml();
-        assert!(yaml.contains("tls-cert: /tmp/cert.pem"), "实际 YAML：\n{yaml}");
-        assert!(yaml.contains("tls-key: /tmp/key.pem"));
+        assert!(!cfg.to_dufs_yaml().contains("tls"));
     }
 
     #[test]
-    fn 只选了证书没选私钥_yaml_里不出现半套_tls() {
+    fn 中继加密开关直通隧道配置() {
         let mut cfg = AppConfig::default();
-        cfg.serve_path = std::env::temp_dir().to_string_lossy().to_string();
-        cfg.tls_cert = "/tmp/cert.pem".into();
-        let yaml = cfg.to_dufs_yaml();
-        assert!(!yaml.contains("tls"), "半套证书混进去 dufs 会拒绝启动：\n{yaml}");
-        // 且整份 YAML 仍能被 dufs 解析
-        dufs_core::Args::from_yaml(&yaml).unwrap();
-    }
-
-    #[test]
-    fn 开了_https_后隧道知道公网地址该用_https() {
-        let mut cfg = AppConfig::default();
-        cfg.tls_cert = "/tmp/cert.pem".into();
-        cfg.tls_key = "/tmp/key.pem".into();
         cfg.relay = RelaySettings {
             enabled: true,
             host: "relay.example.com".into(),
@@ -251,8 +224,11 @@ mod tests {
             client_id: "office".into(),
             token: "0123456789abcdef".into(),
             remote_port: 8080,
+            tls: true,
         };
-        assert!(cfg.tunnel_config().unwrap().https);
+        assert!(cfg.tunnel_config().unwrap().tls);
+        cfg.relay.tls = false;
+        assert!(!cfg.tunnel_config().unwrap().tls);
     }
 
     #[test]
@@ -275,6 +251,7 @@ mod tests {
             client_id: "office".into(),
             token: "0123456789abcdef".into(),
             remote_port: 8080,
+            tls: true,
         };
         let t = cfg.tunnel_config().expect("应当能生成隧道配置");
         assert_eq!(t.local_port, 5001);

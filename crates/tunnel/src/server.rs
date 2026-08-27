@@ -1,17 +1,23 @@
 //! 中继侧（跑在 Linux 公网服务器上）。
 //!
-//! 职责就三件：验明客户端身份、按申请把公网端口指给它、把访客的 TCP 连接与客户端
-//! 回连的数据连接对接起来。**不解析任何业务协议**——转发的是裸字节，dufs 开了 HTTPS
-//! 的话中继也解不开。
+//! 职责就三件：验明客户端身份、按申请把公网端口指给它、把访客的连接与客户端
+//! 回连的数据连接对接起来。不解析任何业务协议。
+//!
+//! 配了 `tls_cert`/`tls_key`（跟中继域名走的证书，certbot 签）后**全部端口都套 TLS**：
+//! 访客那头是正经 HTTPS（浏览器认、无告警），客户端那头的控制/数据连接也是 TLS
+//! （客户端用系统根证书验域名）。TLS 在中继终结——中继本来就是你自己的服务器，
+//! 加密防的是路上的人，不是防它自己。
 
 use crate::protocol::{
     read_msg, write_msg, ClientMsg, Role, ServerMsg, PAIR_TIMEOUT_SECS, PROTO_VERSION,
 };
+use crate::tls::{make_acceptor, BoxStream};
 use anyhow::{bail, Context, Result};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,6 +25,7 @@ use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::timeout;
+use tokio_rustls::TlsAcceptor;
 
 /// 握手阶段的耐心。连上来不说话的，10 秒后请走——否则慢速连接攻击能把中继的
 /// 文件描述符占满。
@@ -38,6 +45,11 @@ pub struct RelayConfig {
     /// 对外域名，仅用于日志里拼出人能点的地址，不参与任何判断。
     #[serde(default)]
     pub public_host: Option<String>,
+    /// TLS 证书与私钥（PEM）。都给了就全端口加密；只给一半在启动时报错。
+    #[serde(default)]
+    pub tls_cert: Option<PathBuf>,
+    #[serde(default)]
+    pub tls_key: Option<PathBuf>,
     pub clients: Vec<ClientAuth>,
 }
 
@@ -62,9 +74,9 @@ pub struct ClientAuth {
     pub ports: Vec<u16>,
 }
 
-/// 等待客户端回连接管的访客连接。
+/// 等待客户端回连接管的访客连接（可能已套 TLS，装箱抹平）。
 struct Pending {
-    stream: TcpStream,
+    stream: BoxStream,
     peer: SocketAddr,
     client_id: String,
     since: Instant,
@@ -85,6 +97,8 @@ pub struct Stats {
 
 pub struct Relay {
     cfg: RelayConfig,
+    /// Some = 全端口 TLS；None = 裸 TCP（内网联调用）。
+    acceptor: Option<TlsAcceptor>,
     pending: Mutex<HashMap<u64, Pending>>,
     sessions: Mutex<HashMap<String, Session>>,
     next_conn_id: AtomicU64,
@@ -92,13 +106,37 @@ pub struct Relay {
 }
 
 impl Relay {
-    pub fn new(cfg: RelayConfig) -> Self {
-        Self {
+    pub fn new(cfg: RelayConfig) -> Result<Self> {
+        let acceptor = match (&cfg.tls_cert, &cfg.tls_key) {
+            (Some(cert), Some(key)) => Some(make_acceptor(cert, key)?),
+            (None, None) => None,
+            _ => bail!("tls_cert 和 tls_key 要么都给要么都不给"),
+        };
+        Ok(Self {
             cfg,
+            acceptor,
             pending: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
             next_conn_id: AtomicU64::new(1),
             stats: Stats::default(),
+        })
+    }
+
+    /// 按配置给刚 accept 的连接套（或不套）TLS。带超时：TLS 握手挂着不动的连接
+    /// 不能占着文件描述符。
+    async fn maybe_tls(&self, tcp: TcpStream) -> Result<BoxStream> {
+        match &self.acceptor {
+            Some(acceptor) => {
+                let stream = timeout(
+                    Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
+                    acceptor.accept(tcp),
+                )
+                .await
+                .with_context(|| "TLS 握手超时")?
+                .with_context(|| "TLS 握手失败")?;
+                Ok(Box::new(stream))
+            }
+            None => Ok(Box::new(tcp)),
         }
     }
 
@@ -112,7 +150,11 @@ impl Relay {
         let listener = TcpListener::bind(addr)
             .await
             .with_context(|| format!("绑定控制端口 {addr} 失败"))?;
-        log::info!("中继已启动，控制端口 {addr}，已登记 {} 个客户端", self.cfg.clients.len());
+        log::info!(
+            "中继已启动，控制端口 {addr}（{}），已登记 {} 个客户端",
+            if self.acceptor.is_some() { "TLS" } else { "明文" },
+            self.cfg.clients.len()
+        );
 
         {
             let relay = self.clone();
@@ -129,7 +171,12 @@ impl Relay {
             };
             let relay = self.clone();
             tokio::spawn(async move {
-                if let Err(e) = relay.handle_incoming(stream, peer).await {
+                let result = async {
+                    let stream = relay.maybe_tls(stream).await?;
+                    relay.clone().handle_incoming(stream, peer).await
+                }
+                .await;
+                if let Err(e) = result {
                     log::info!("来自 {peer} 的连接结束：{e}");
                 }
             });
@@ -151,7 +198,7 @@ impl Relay {
         }
     }
 
-    async fn handle_incoming(self: Arc<Self>, mut stream: TcpStream, peer: SocketAddr) -> Result<()> {
+    async fn handle_incoming(self: Arc<Self>, mut stream: BoxStream, peer: SocketAddr) -> Result<()> {
         let hello: ClientMsg = timeout(
             Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
             read_msg(&mut stream),
@@ -236,7 +283,7 @@ impl Relay {
     }
 
     /// 控制会话：处理端口申请、心跳，并把新访客的通知推给客户端。
-    async fn run_control(self: Arc<Self>, mut stream: TcpStream, client_id: String) -> Result<()> {
+    async fn run_control(self: Arc<Self>, mut stream: BoxStream, client_id: String) -> Result<()> {
         // 顶掉这个客户端的旧会话。断线重连时旧会话往往还没被 TCP 判死，它手里攥着端口，
         // 新会话的 Bind 就会撞上「地址已被占用」——而占用者是它自己的上一条命。
         self.kick_previous(&client_id).await;
@@ -375,6 +422,15 @@ impl Relay {
                     },
                 };
 
+                // 访客那头也按同一开关走 TLS——配了证书就是正经 HTTPS 端口
+                let stream = match relay.maybe_tls(stream).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        // 扫端口的机器人经常裸连 TLS 端口，握手失败是常态，debug 级即可
+                        log::debug!("{peer} 的 TLS 握手没过：{e:#}");
+                        continue;
+                    }
+                };
                 let conn_id = relay.next_conn_id.fetch_add(1, Ordering::Relaxed);
                 relay.pending.lock().await.insert(
                     conn_id,
@@ -400,7 +456,7 @@ impl Relay {
     }
 
     /// 把客户端回连的数据连接与在等的访客连接对接起来。
-    async fn splice(&self, mut client_stream: TcpStream, client_id: String, conn_id: u64) -> Result<()> {
+    async fn splice(&self, mut client_stream: BoxStream, client_id: String, conn_id: u64) -> Result<()> {
         let pending = self.pending.lock().await.remove(&conn_id);
         let Some(pending) = pending else {
             bail!("conn_id {conn_id} 不存在或已超时");

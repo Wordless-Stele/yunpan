@@ -51,12 +51,14 @@ async fn 从公网端口进的字节原样从本地服务回来() {
         control_port,
         heartbeat_secs: 2,
         public_host: None,
+        tls_cert: None,
+        tls_key: None,
         clients: vec![ClientAuth {
             id: "test".into(),
             token: TOKEN.into(),
             ports: vec![remote_port],
         }],
-    }));
+    }).unwrap());
     tokio::spawn(relay.run());
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -68,7 +70,8 @@ async fn 从公网端口进的字节原样从本地服务回来() {
         name: "echo".into(),
         remote_port,
         local_port,
-        https: false,
+        tls: false,
+        extra_trust_der: None,
     });
 
     // 等隧道上线
@@ -107,12 +110,14 @@ async fn 令牌错误的客户端会停在_fatal_而不是无限重试() {
         control_port,
         heartbeat_secs: 2,
         public_host: None,
+        tls_cert: None,
+        tls_key: None,
         clients: vec![ClientAuth {
             id: "test".into(),
             token: TOKEN.into(),
             ports: vec![18080],
         }],
-    }));
+    }).unwrap());
     tokio::spawn(relay.run());
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -124,7 +129,8 @@ async fn 令牌错误的客户端会停在_fatal_而不是无限重试() {
         name: "echo".into(),
         remote_port: 18080,
         local_port: 18081,
-        https: false,
+        tls: false,
+        extra_trust_der: None,
     });
 
     let mut status = handle.status.clone();
@@ -141,4 +147,94 @@ async fn 令牌错误的客户端会停在_fatal_而不是无限重试() {
     assert!(fatal.contains("令牌") || fatal.contains("拒绝"), "报错文案：{fatal}");
 
     handle.stop().await;
+}
+
+/// TLS 全链路：中继用自签证书（域名 localhost），客户端把它设为额外信任锚，
+/// 访客也走 TLS 连公网端口。任何一段没真正套上加密，这条都过不了。
+#[tokio::test(flavor = "multi_thread")]
+async fn 开了_tls_后三段连接都加密且字节原样往返() {
+    use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
+    use tokio_rustls::rustls::{ClientConfig as RustlsClientConfig, RootCertStore};
+
+    let control_port = free_port().await;
+    let remote_port = free_port().await;
+    let local_port = free_port().await;
+    spawn_echo(local_port).await;
+
+    // 自签证书写进临时文件，喂给中继
+    let signed = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let dir = std::env::temp_dir().join(format!("yunpan-tls-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cert_path = dir.join("cert.pem");
+    let key_path = dir.join("key.pem");
+    std::fs::write(&cert_path, signed.cert.pem()).unwrap();
+    std::fs::write(&key_path, signed.key_pair.serialize_pem()).unwrap();
+    let cert_der = signed.cert.der().to_vec();
+
+    let relay = Arc::new(Relay::new(RelayConfig {
+        bind: "127.0.0.1".parse().unwrap(),
+        control_port,
+        heartbeat_secs: 2,
+        public_host: None,
+        tls_cert: Some(cert_path),
+        tls_key: Some(key_path),
+        clients: vec![ClientAuth {
+            id: "test".into(),
+            token: TOKEN.into(),
+            ports: vec![remote_port],
+        }],
+    }).unwrap());
+    tokio::spawn(relay.run());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let handle = yunpan_tunnel::client::spawn(ClientConfig {
+        relay_host: "localhost".into(),
+        control_port,
+        client_id: "test".into(),
+        token: TOKEN.into(),
+        name: "echo".into(),
+        remote_port,
+        local_port,
+        tls: true,
+        extra_trust_der: Some(cert_der.clone()),
+    });
+
+    let mut status = handle.status.clone();
+    let url = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let RelayStatus::Online { public_url } = &*status.borrow() {
+                break public_url.clone();
+            }
+            status.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("5 秒内隧道没能上线");
+    assert!(url.starts_with("https://"), "公网地址应当是 https，实际：{url}");
+
+    // 访客端也走 TLS 连「公网」端口
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(cert_der)).unwrap();
+    let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(
+        RustlsClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    ));
+    let tcp = TcpStream::connect(("127.0.0.1", remote_port)).await.unwrap();
+    let mut visitor = connector
+        .connect(ServerName::try_from("localhost").unwrap(), tcp)
+        .await
+        .expect("访客 TLS 握手失败");
+
+    let payload = "TLS 全链路测试 hello".as_bytes();
+    visitor.write_all(payload).await.unwrap();
+    let mut got = vec![0u8; payload.len()];
+    tokio::time::timeout(Duration::from_secs(5), visitor.read_exact(&mut got))
+        .await
+        .expect("5 秒内没收到回显")
+        .unwrap();
+    assert_eq!(got, payload);
+
+    handle.stop().await;
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -52,8 +52,9 @@ async fn main() -> Result<()> {
 
     if let Some(Command::Check) = cli.command {
         println!(
-            "配置合法：控制端口 {}，{} 个客户端",
+            "配置合法：控制端口 {}（{}），{} 个客户端",
             cfg.control_port,
+            if cfg.tls_cert.is_some() { "TLS" } else { "明文——建议配上 tls_cert/tls_key" },
             cfg.clients.len()
         );
         for client in &cfg.clients {
@@ -62,7 +63,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    Arc::new(Relay::new(cfg)).run().await
+    Arc::new(Relay::new(cfg)?).run().await
 }
 
 fn load_config(path: &PathBuf) -> Result<RelayConfig> {
@@ -71,6 +72,10 @@ fn load_config(path: &PathBuf) -> Result<RelayConfig> {
     let cfg: RelayConfig =
         toml::from_str(&text).with_context(|| format!("解析配置 {} 失败", path.display()))?;
 
+    match (&cfg.tls_cert, &cfg.tls_key) {
+        (Some(_), Some(_)) | (None, None) => {}
+        _ => anyhow::bail!("tls_cert 和 tls_key 要么都给要么都不给"),
+    }
     if cfg.clients.is_empty() {
         anyhow::bail!("配置里一个客户端都没有，中继起来也没人能用");
     }
@@ -136,6 +141,22 @@ ports = [7100]
         );
         let err = load_config(&path).unwrap_err().to_string();
         assert!(err.contains("控制端口"), "实际报错：{err}");
+    }
+
+    #[test]
+    fn 只给一半_tls_配置会被拒绝() {
+        let path = 写临时配置(
+            r#"
+control_port = 7100
+tls_cert = "/etc/yunpan/fullchain.pem"
+[[clients]]
+id = "office"
+token = "0123456789abcdef0123"
+ports = [8080]
+"#,
+        );
+        let err = load_config(&path).unwrap_err().to_string();
+        assert!(err.contains("要么都给"), "实际报错：{err}");
     }
 
     #[test]

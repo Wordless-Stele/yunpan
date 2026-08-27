@@ -38,8 +38,10 @@ script 问题不是代码问题）；推 `v*` 标签走 `.github/workflows/relea
 - `src/autostart.rs`：OS 是唯一真相（plist/注册表/.desktop 存在与否），不进
   AppConfig；自启条目带 `--hidden`。单实例在 main.rs（仅 release 编译，端口 17654，
   比 ProxyZms 的 17653 加一，两应用同机不打架）。
-- HTTPS：`AppConfig.tls_cert/tls_key` 成对才生效（`tls_enabled()`），半套不进 YAML；
-  隧道 `ClientConfig.https` 只影响公网地址显示的 scheme。
+- TLS 终结在中继（用户定的架构，别改回客户端配证书）：`RelayConfig.tls_cert/key`
+  一把闸控三种连接（访客 HTTPS + 控制 + 数据），客户端 `ClientConfig.tls` 用系统
+  根证书验中继域名，`extra_trust_der` 仅供测试/自签（界面不暴露）。本地 dufs 恒明文
+  （dufs-core 的 tls 能力保留未用）。帧格式在 TLS 之内不变，PROTO_VERSION 不动。
 - 图标源在 `logos/`（概念稿+preview.html），成品在 `assets/icons/`（include_bytes
   进二进制）。换 logo：改 `assets/icons/app.svg` 与 tray-on/off.svg 后用 resvg 重导，
   尺寸认准 128/32/32，`assets/icon.ico|png` 用 PIL 重打。

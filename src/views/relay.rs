@@ -143,9 +143,26 @@ pub fn RelayView() -> Element {
                     },
                 }
             }
+            div { class: "field",
+                label { "" }
+                label { class: "check",
+                    input {
+                        r#type: "checkbox",
+                        checked: cfg().relay.tls,
+                        onchange: move |e| {
+                            let mut c = cfg();
+                            c.relay.tls = e.value().parse().unwrap_or(true);
+                            c.save();
+                            cfg.set(c);
+                        },
+                    }
+                    "TLS 加密（中继已配证书；访客走 https）"
+                }
+            }
             p { class: "hint",
-                "别人访问的就是 服务器地址:公网端口。这个端口必须在中继侧该客户端的白名单里，"
-                "否则会被拒绝。中继只做转发，看不到传输内容。"
+                "别人访问的就是 服务器地址:公网端口，端口必须在中继侧该客户端的白名单里。"
+                "证书只配在中继上（certbot 跟着它的域名签），这台电脑不需要任何证书文件。"
+                "勾着加密时若一直连不上，多半是中继还没配证书，或上面填的不是证书对应的域名。"
             }
         }
     }

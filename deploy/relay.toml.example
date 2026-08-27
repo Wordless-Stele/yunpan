@@ -12,6 +12,17 @@ heartbeat_secs = 15
 # 对外域名，只用于日志里拼出可读地址，可不填
 public_host = "relay.example.com"
 
+# TLS 证书（强烈建议配）：配了之后访客走正经 HTTPS，客户端到中继的隧道也全程加密，
+# 桌面端那边零证书文件、只需勾着「TLS 加密」。用 certbot 给中继域名签一张即可：
+#   certbot certonly --standalone -d relay.example.com
+# 注意本服务以 DynamicUser 跑，读不了 /etc/letsencrypt 下 root 专属的目录——
+# 用 deploy-hook 把证书拷出来并重启服务：
+#   certbot ... --deploy-hook 'install -m 640 -o root -g nogroup \
+#     /etc/letsencrypt/live/relay.example.com/fullchain.pem /etc/letsencrypt/live/relay.example.com/privkey.pem \
+#     /etc/yunpan/ && systemctl restart yunpan-relay'
+tls_cert = "/etc/yunpan/fullchain.pem"
+tls_key = "/etc/yunpan/privkey.pem"
+
 # 每台要穿透的机器登记一条。令牌用 `yunpan-relay token` 生成。
 # ports 是该客户端允许申请的公网端口白名单——没有白名单的话，任何拿到令牌的
 # 客户端都能抢走 22/443，一台失守等于整机失守。这些端口防火墙也要放行。
