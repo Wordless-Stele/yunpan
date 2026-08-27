@@ -114,6 +114,22 @@ fn allow_other_set_foreground() {
     unsafe { AllowSetForegroundWindow(ASFW_ANY) };
 }
 
+/// 系统当前是否深色模式。只用来定窗口首帧底色，页面内配色由 CSS 自己跟系统，
+/// 所以探测粗糙点无妨：macOS 问 defaults，其它平台返回 false（首帧白底）。
+#[cfg(feature = "desktop")]
+fn dark_scheme() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleInterfaceStyle"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("Dark"))
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
 fn main() {
     #[cfg(not(debug_assertions))]
     if !acquire_single_instance() {
@@ -146,6 +162,8 @@ fn main() {
         #[cfg_attr(target_os = "macos", allow(unused_mut))]
         let mut cfg = Config::new()
             .with_window(window)
+            // 初始背景跟随系统深浅色（值要与 main.css 的 --paper 一致），首帧不闪白/闪黑
+            .with_background_color(if dark_scheme() { (15, 15, 15, 255) } else { (255, 255, 255, 255) })
             // 关窗只是收进托盘，共享不断——这正是托盘应用的意义
             .with_close_behaviour(WindowCloseBehaviour::WindowHides)
             .with_custom_head(custom_head);
@@ -367,7 +385,10 @@ fn App() -> Element {
     rsx! {
         div { class: "app",
             header { class: "topbar",
-                span { class: "brand", "云" b { "链" } "盘" }
+                div { class: "brand",
+                    div { class: "brand-title", "云" b { "链" } "盘" }
+                    div { class: "brand-sub", "Yunpan · File Station" }
+                }
                 button {
                     class: if tab() == Tab::Share { "tab active" } else { "tab" },
                     onclick: move |_| tab.set(Tab::Share),
