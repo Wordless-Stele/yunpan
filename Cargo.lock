@@ -7654,6 +7654,7 @@ dependencies = [
  "dioxus",
  "dirs",
  "dufs-core",
+ "image",
  "log",
  "qrcode",
  "rfd 0.15.4",

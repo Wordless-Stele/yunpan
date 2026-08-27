@@ -23,6 +23,9 @@ pub struct AppConfig {
     pub auth_user: String,
     pub auth_pass: String,
     pub guest_readonly: bool,
+    /// HTTPS 证书与私钥的路径。都非空才启用——dufs 只收成对的。
+    pub tls_cert: String,
+    pub tls_key: String,
     pub relay: RelaySettings,
 }
 
@@ -53,6 +56,8 @@ impl Default for AppConfig {
             auth_user: String::new(),
             auth_pass: String::new(),
             guest_readonly: true,
+            tls_cert: String::new(),
+            tls_key: String::new(),
             relay: RelaySettings::default(),
         }
     }
@@ -104,6 +109,11 @@ impl AppConfig {
         !self.auth_user.trim().is_empty() && !self.auth_pass.trim().is_empty()
     }
 
+    /// HTTPS 是否启用（证书和私钥都选了才算）。
+    pub fn tls_enabled(&self) -> bool {
+        !self.tls_cert.trim().is_empty() && !self.tls_key.trim().is_empty()
+    }
+
     /// 翻译成 dufs 的配置 YAML。
     pub fn to_dufs_yaml(&self) -> String {
         /// 只为序列化 YAML 而生的镜像结构；字段名与 dufs 文档一致。
@@ -119,6 +129,10 @@ impl AppConfig {
             allow_archive: bool,
             #[serde(skip_serializing_if = "Vec::is_empty")]
             auth: Vec<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            tls_cert: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            tls_key: Option<String>,
         }
 
         let mut auth = vec![];
@@ -143,6 +157,10 @@ impl AppConfig {
             allow_search: self.allow_search,
             allow_archive: self.allow_archive,
             auth,
+            // 只有一半就当没配——半套证书 dufs 会直接拒绝启动，
+            // 界面上另有提示，不让用户莫名其妙启动失败
+            tls_cert: self.tls_enabled().then(|| self.tls_cert.trim().to_string()),
+            tls_key: self.tls_enabled().then(|| self.tls_key.trim().to_string()),
         };
         serde_yaml::to_string(&doc).expect("配置镜像结构必然可序列化")
     }
@@ -165,6 +183,7 @@ impl AppConfig {
             name: "dufs".to_string(),
             remote_port: r.remote_port,
             local_port: self.port,
+            https: self.tls_enabled(),
         })
     }
 }
@@ -196,6 +215,44 @@ mod tests {
         assert!(yaml.contains("'@/'") || yaml.contains("\"@/\""), "访客只读规则丢了：\n{yaml}");
         // 且 dufs 真的认
         dufs_core::Args::from_yaml(&yaml).expect("dufs 解析失败");
+    }
+
+    #[test]
+    fn 选好证书和私钥后_yaml_里有成对的_tls_配置() {
+        let mut cfg = AppConfig::default();
+        cfg.serve_path = std::env::temp_dir().to_string_lossy().to_string();
+        cfg.tls_cert = "/tmp/cert.pem".into();
+        cfg.tls_key = "/tmp/key.pem".into();
+        let yaml = cfg.to_dufs_yaml();
+        assert!(yaml.contains("tls-cert: /tmp/cert.pem"), "实际 YAML：\n{yaml}");
+        assert!(yaml.contains("tls-key: /tmp/key.pem"));
+    }
+
+    #[test]
+    fn 只选了证书没选私钥_yaml_里不出现半套_tls() {
+        let mut cfg = AppConfig::default();
+        cfg.serve_path = std::env::temp_dir().to_string_lossy().to_string();
+        cfg.tls_cert = "/tmp/cert.pem".into();
+        let yaml = cfg.to_dufs_yaml();
+        assert!(!yaml.contains("tls"), "半套证书混进去 dufs 会拒绝启动：\n{yaml}");
+        // 且整份 YAML 仍能被 dufs 解析
+        dufs_core::Args::from_yaml(&yaml).unwrap();
+    }
+
+    #[test]
+    fn 开了_https_后隧道知道公网地址该用_https() {
+        let mut cfg = AppConfig::default();
+        cfg.tls_cert = "/tmp/cert.pem".into();
+        cfg.tls_key = "/tmp/key.pem".into();
+        cfg.relay = RelaySettings {
+            enabled: true,
+            host: "relay.example.com".into(),
+            control_port: 7100,
+            client_id: "office".into(),
+            token: "0123456789abcdef".into(),
+            remote_port: 8080,
+        };
+        assert!(cfg.tunnel_config().unwrap().https);
     }
 
     #[test]

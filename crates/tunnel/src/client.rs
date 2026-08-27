@@ -32,6 +32,9 @@ pub struct ClientConfig {
     pub remote_port: u16,
     /// 本机 dufs 监听的端口。
     pub local_port: u16,
+    /// 本机 dufs 是否开了 HTTPS。只影响公网地址显示成 http 还是 https——
+    /// 中继转发的本来就是裸字节，TLS 与否它无感。
+    pub https: bool,
 }
 
 /// 中继连接的当前状态。界面上的托盘图标与状态条都读它。
@@ -192,7 +195,8 @@ async fn session(
         match msg {
             ServerMsg::Ping { ts } => write_msg(&mut stream, &ClientMsg::Pong { ts }).await?,
             ServerMsg::BindOk { remote_port, .. } => {
-                let public_url = format!("http://{}:{}", cfg.relay_host, remote_port);
+                let scheme = if cfg.https { "https" } else { "http" };
+                let public_url = format!("{scheme}://{}:{}", cfg.relay_host, remote_port);
                 log::info!("中继已打通：{public_url}");
                 let _ = status_tx.send(RelayStatus::Online { public_url });
             }

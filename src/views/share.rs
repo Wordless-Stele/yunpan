@@ -13,6 +13,9 @@ pub fn ShareView() -> Element {
     let started_with = use_context::<Signal<Option<AppConfig>>>();
     // 点了哪条地址就显示哪条的二维码；None = 收起
     let mut qr_url = use_signal(|| None::<String>);
+    // 开机自启：OS（plist/注册表/.desktop 是否存在）是唯一真相，进来时读一次
+    let mut autostart_on = use_signal(crate::autostart::is_enabled);
+    let mut autostart_err = use_signal(String::new);
 
     let status = share();
     let running = matches!(status, ShareStatus::Running { .. });
@@ -297,6 +300,113 @@ pub fn ShareView() -> Element {
             }
             p { class: "hint",
                 "设了密码后，上传/删除等写操作只有登录后才能做；访客要么只读、要么完全进不来，由上面的勾决定。"
+            }
+        }
+
+        section { class: "card",
+            h3 { "HTTPS 证书（留空 = 明文 HTTP）" }
+            div { class: "field",
+                label { "证书" }
+                input {
+                    r#type: "text",
+                    readonly: true,
+                    placeholder: "cert.pem / fullchain.pem",
+                    value: "{cfg().tls_cert}",
+                }
+                button {
+                    class: "btn small",
+                    onclick: move |_| {
+                        spawn(async move {
+                            if let Some(f) = rfd::AsyncFileDialog::new()
+                                .add_filter("证书", &["pem", "crt", "cer"])
+                                .pick_file().await
+                            {
+                                let mut c = cfg();
+                                c.tls_cert = f.path().to_string_lossy().to_string();
+                                c.save();
+                                cfg.set(c);
+                            }
+                        });
+                    },
+                    "选择…"
+                }
+            }
+            div { class: "field",
+                label { "私钥" }
+                input {
+                    r#type: "text",
+                    readonly: true,
+                    placeholder: "key.pem / privkey.pem",
+                    value: "{cfg().tls_key}",
+                }
+                button {
+                    class: "btn small",
+                    onclick: move |_| {
+                        spawn(async move {
+                            if let Some(f) = rfd::AsyncFileDialog::new()
+                                .add_filter("私钥", &["pem", "key"])
+                                .pick_file().await
+                            {
+                                let mut c = cfg();
+                                c.tls_key = f.path().to_string_lossy().to_string();
+                                c.save();
+                                cfg.set(c);
+                            }
+                        });
+                    },
+                    "选择…"
+                }
+            }
+            if !cfg().tls_cert.is_empty() || !cfg().tls_key.is_empty() {
+                div { class: "field",
+                    label { "" }
+                    button {
+                        class: "btn small",
+                        onclick: move |_| {
+                            let mut c = cfg();
+                            c.tls_cert = String::new();
+                            c.tls_key = String::new();
+                            c.save();
+                            cfg.set(c);
+                        },
+                        "清除，回到 HTTP"
+                    }
+                }
+            }
+            if cfg().tls_cert.is_empty() != cfg().tls_key.is_empty() {
+                p { class: "hint warn", "证书和私钥要成对选，只有一个不会生效。" }
+            }
+            p { class: "hint",
+                "开了 HTTPS 后，经中继转发的也是加密流量，中继服务器看不见内容。"
+                "自签证书浏览器会告警，正式用建议上正经证书（如 Let's Encrypt）。"
+            }
+        }
+
+        section { class: "card",
+            h3 { "通用" }
+            div { class: "field",
+                label { "" }
+                label { class: "check",
+                    input {
+                        r#type: "checkbox",
+                        checked: autostart_on(),
+                        onchange: move |e| {
+                            let want = e.value().parse::<bool>().unwrap_or(false);
+                            match crate::autostart::set_enabled(want) {
+                                Ok(()) => {
+                                    autostart_err.set(String::new());
+                                    // 落定后以 OS 实际状态为准，防止写失败但勾变了
+                                    autostart_on.set(crate::autostart::is_enabled());
+                                }
+                                Err(msg) => autostart_err.set(msg),
+                            }
+                        },
+                    }
+                    "开机自动启动（静默进托盘，不弹窗口）"
+                }
+            }
+            if !autostart_err().is_empty() {
+                p { class: "hint err", "{autostart_err}" }
             }
         }
     }

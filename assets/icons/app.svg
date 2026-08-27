@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g id="icon">
+    <rect id="plate" x="16" y="16" width="480" height="480" rx="112" fill="#1A1A1A"/>
+    <path id="cloud" fill="#FFFFFF" d="
+      M158 356
+      a64 64 0 0 1 -10 -127
+      a92 92 0 0 1 178 -23
+      a72 72 0 0 1 22 150
+      z"/>
+    <rect id="slot" x="196" y="292" width="120" height="34" rx="17" fill="#E34234"/>
+  </g>
+</svg>

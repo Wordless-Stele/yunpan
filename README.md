@@ -67,6 +67,18 @@ systemctl daemon-reload && systemctl enable --now yunpan-relay
 - 端口白名单：客户端只能申请中继配置里列给它的端口，令牌泄露也抢不走 22/443。
 - 文件访问控制归 dufs：账号密码（Digest）、访客只读、上传/删除开关，都在共享页。
 
+## 桌面端功能一览
+
+- 共享页：选文件夹、端口、权限开关、账号密码（Digest）、**HTTPS 证书**（成对选
+  cert/key，开了之后中继转发的也是加密流，中继看不见内容）、**开机自启**（写
+  plist / 注册表 / XDG autostart，登录时带 `--hidden` 静默进托盘）。
+- 中继页：服务器地址、令牌等；状态实时显示，公网地址随 HTTPS 自动切换 http/https。
+- **单实例**（仅发布版）：再次双击不重开，通知已有实例把窗口拉到前台（127.0.0.1:17654
+  握手，端口避开临时端口范围）。
+- 图标：`logos/` 里是品牌概念稿与预览页，`assets/icons/` 是选定稿导出的成品
+  （`app.svg` 源、窗口 128px、托盘两态 32px），`assets/icon.ico|png` 给打包器。
+  重新导出：`resvg -w <尺寸> assets/icons/app.svg out.png`，ICO 用 PIL 打包。
+
 ## 已知取舍
 
 - `panic = "abort"`（release）：dufs 里靠 unwind 兜底的路径会直接崩——宁可明确崩溃，

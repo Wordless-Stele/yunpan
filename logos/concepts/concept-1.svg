@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g id="icon">
+    <path id="cloud" fill="#E34234" fill-rule="evenodd" d="
+      M150 372
+      a74 74 0 0 1 -12 -147
+      a104 104 0 0 1 202 -26
+      a82 82 0 0 1 26 173
+      z
+      M196 268
+      a44 44 0 0 0 0 88 h120 a44 44 0 0 0 0 -88 z
+      "/>
+    <rect id="link-inner" x="196" y="296" width="120" height="32" rx="16" fill="#E34234"/>
+    <rect x="226" y="304" width="60" height="16" rx="8" fill="#FFFFFF"/>
+  </g>
+</svg>

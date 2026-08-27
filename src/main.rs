@@ -19,6 +19,7 @@
 
 use dioxus::prelude::*;
 
+mod autostart;
 mod config;
 mod engine;
 mod logbus;
@@ -37,7 +38,88 @@ const TRAY_TOGGLE_ID: &str = "yp-toggle";
 #[cfg(feature = "desktop")]
 const TRAY_QUIT_ID: &str = "yp-quit";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 单实例（仅发布版）：第二个实例不再起一份，而是通知已有实例把窗口显示出来。
+// 写法承自 ProxyZms。端口刻意避开临时端口范围（49152-65535）——落在那个区间里
+// 会被随机进程占走，我们就会误判「已有实例」而静默退出，应用从此打不开。
+// 17654 = ProxyZms 的 17653 + 1，两个应用可以同机共存。
+
+#[cfg(not(debug_assertions))]
+static SHOW_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(not(debug_assertions))]
+const SINGLE_INSTANCE_ADDR: &str = "127.0.0.1:17654";
+/// 握手串：确认端口对面确实是本程序，而不是碰巧占了端口的别人。
+#[cfg(not(debug_assertions))]
+const HELLO: &[u8] = b"yunpan-show\n";
+#[cfg(not(debug_assertions))]
+const ACK: &[u8] = b"yunpan-ok\n";
+
+/// true = 本进程是主实例，继续；false = 已有实例（已请它显示窗口），退出。
+#[cfg(not(debug_assertions))]
+fn acquire_single_instance() -> bool {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    // —— 探测：端口对面是不是「另一个我」——
+    if let Ok(addr) = SINGLE_INSTANCE_ADDR.parse() {
+        if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
+            // Windows：把「窃取前台焦点」的权限放给任意进程，主实例的 set_focus()
+            // 里的 SetForegroundWindow 才不会被前台保护策略静默拒掉（否则只闪任务栏）
+            #[cfg(windows)]
+            allow_other_set_foreground();
+
+            // 全程带超时：对面若只 accept 不回话，不能把启动流程挂死
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+            let mut buf = [0u8; ACK.len()];
+            if stream.write_all(HELLO).is_ok()
+                && stream.read_exact(&mut buf).is_ok()
+                && buf == *ACK
+            {
+                return false;
+            }
+            // 端口被别人占了：不退出，继续以主实例身份启动。
+            // 宁可多开一个，也不能出现「双击没反应」。
+            return true;
+        }
+    }
+
+    // —— 主实例：占住端口，起线程接收「显示」请求 ——
+    if let Ok(listener) = TcpListener::bind(SINGLE_INSTANCE_ADDR) {
+        std::thread::spawn(move || {
+            for mut conn in listener.incoming().flatten() {
+                let _ = conn.set_read_timeout(Some(Duration::from_millis(500)));
+                let _ = conn.set_write_timeout(Some(Duration::from_millis(500)));
+                let mut buf = [0u8; HELLO.len()];
+                if conn.read_exact(&mut buf).is_ok() && buf == *HELLO {
+                    let _ = conn.write_all(ACK);
+                    SHOW_REQUESTED.store(true, Ordering::SeqCst);
+                }
+            }
+        });
+    }
+    true
+}
+
+#[cfg(all(windows, not(debug_assertions)))]
+fn allow_other_set_foreground() {
+    // ASFW_ANY = 0xFFFFFFFF（任意 PID）。签名：BOOL AllowSetForegroundWindow(DWORD)
+    #[link(name = "user32")]
+    extern "system" {
+        fn AllowSetForegroundWindow(dwProcessId: u32) -> i32;
+    }
+    const ASFW_ANY: u32 = 0xFFFF_FFFF;
+    unsafe { AllowSetForegroundWindow(ASFW_ANY) };
+}
+
 fn main() {
+    #[cfg(not(debug_assertions))]
+    if !acquire_single_instance() {
+        return;
+    }
+
     logbus::install();
 
     #[cfg(feature = "desktop")]
@@ -45,9 +127,13 @@ fn main() {
         use dioxus::desktop::tao::dpi::LogicalSize;
         use dioxus::desktop::{Config, WindowBuilder, WindowCloseBehaviour};
 
+        // 开机自启的条目带 --hidden：登录时静默进托盘，不弹主窗口
+        let start_hidden = std::env::args().any(|a| a == autostart::HIDDEN_FLAG);
+
         let window = WindowBuilder::new()
             .with_title("云链盘")
             .with_window_icon(tray::window_icon())
+            .with_visible(!start_hidden)
             .with_inner_size(LogicalSize::new(760.0, 640.0))
             .with_min_inner_size(LogicalSize::new(620.0, 480.0));
 
@@ -257,6 +343,25 @@ fn App() -> Element {
             use_tray_menu_event_handler(move |e| h(&e.id));
         }
         use_muda_event_handler(move |e| handle_menu(&e.id));
+
+        // 单实例：另一个实例请求显示时，把本窗口拉到前台（仅发布版有这条通道）
+        #[cfg(not(debug_assertions))]
+        {
+            let win_show = use_window();
+            use_future(move || {
+                let win = win_show.clone();
+                async move {
+                    use std::sync::atomic::Ordering;
+                    loop {
+                        if SHOW_REQUESTED.swap(false, Ordering::SeqCst) {
+                            win.set_visible(true);
+                            win.set_focus();
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    }
+                }
+            });
+        }
     }
 
     rsx! {

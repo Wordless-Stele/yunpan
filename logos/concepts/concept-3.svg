@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g id="icon">
+    <rect id="bar-top" x="176" y="92" width="160" height="42" rx="21" fill="#1A1A1A"/>
+    <rect id="bar-main" x="92" y="178" width="328" height="42" rx="21" fill="#1A1A1A"/>
+    <path id="si" d="M300 252 L192 388 L332 388" fill="none" stroke="#1A1A1A" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle id="dot" cx="384" cy="356" r="34" fill="#E34234"/>
+  </g>
+</svg>

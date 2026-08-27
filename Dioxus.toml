@@ -5,6 +5,7 @@
 [bundle]
 identifier = "top.zhoumaosen.yunpan"
 publisher = "ZHOUMAOSEN"
+icon = ["assets/icon.ico", "assets/icon.png"]
 
 [web.app]
 title = "云链盘"

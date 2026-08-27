@@ -35,5 +35,13 @@ script 问题不是代码问题）；推 `v*` 标签走 `.github/workflows/relea
 - `RelayStatus::Fatal`（令牌错/端口不在白名单）**不重试也不许被 Idle 盖掉**，
   测试 `令牌错误的客户端会停在_fatal_而不是无限重试` 盯着这条。
 - GUI 配置改动即存盘（`config.json`）；共享跑着时改配置不热生效，界面提示重启。
+- `src/autostart.rs`：OS 是唯一真相（plist/注册表/.desktop 存在与否），不进
+  AppConfig；自启条目带 `--hidden`。单实例在 main.rs（仅 release 编译，端口 17654，
+  比 ProxyZms 的 17653 加一，两应用同机不打架）。
+- HTTPS：`AppConfig.tls_cert/tls_key` 成对才生效（`tls_enabled()`），半套不进 YAML；
+  隧道 `ClientConfig.https` 只影响公网地址显示的 scheme。
+- 图标源在 `logos/`（概念稿+preview.html），成品在 `assets/icons/`（include_bytes
+  进二进制）。换 logo：改 `assets/icons/app.svg` 与 tray-on/off.svg 后用 resvg 重导，
+  尺寸认准 128/32/32，`assets/icon.ico|png` 用 PIL 重打。
 - 托盘写法抄的 ProxyZms（muda + tray 两个 handler 都挂、共用处理函数），
   动托盘前先看那边 main.rs 的注释，坑都写在那里。

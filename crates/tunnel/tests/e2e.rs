@@ -68,6 +68,7 @@ async fn 从公网端口进的字节原样从本地服务回来() {
         name: "echo".into(),
         remote_port,
         local_port,
+        https: false,
     });
 
     // 等隧道上线
@@ -123,6 +124,7 @@ async fn 令牌错误的客户端会停在_fatal_而不是无限重试() {
         name: "echo".into(),
         remote_port: 18080,
         local_port: 18081,
+        https: false,
     });
 
     let mut status = handle.status.clone();
