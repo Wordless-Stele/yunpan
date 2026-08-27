@@ -1,0 +1,21 @@
+# 云链盘中继端配置。放到 /etc/yunpan/relay.toml 后：
+#   yunpan-relay --config /etc/yunpan/relay.toml check   # 先验一遍
+#   systemctl start yunpan-relay
+
+# 监听地址与控制端口（客户端连的就是它；防火墙要放行）
+bind = "0.0.0.0"
+control_port = 7100
+
+# 心跳间隔（秒）。连续 3 次无应答判定客户端掉线并释放端口
+heartbeat_secs = 15
+
+# 对外域名，只用于日志里拼出可读地址，可不填
+public_host = "relay.example.com"
+
+# 每台要穿透的机器登记一条。令牌用 `yunpan-relay token` 生成。
+# ports 是该客户端允许申请的公网端口白名单——没有白名单的话，任何拿到令牌的
+# 客户端都能抢走 22/443，一台失守等于整机失守。这些端口防火墙也要放行。
+[[clients]]
+id = "office"
+token = "把 yunpan-relay token 的输出粘到这里"
+ports = [8080]

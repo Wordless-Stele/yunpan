@@ -1,0 +1,24 @@
+# 云链盘中继端 systemd 服务。
+# 安装：
+#   cp yunpan-relay /usr/local/bin/
+#   mkdir -p /etc/yunpan && cp relay.toml.example /etc/yunpan/relay.toml  # 然后改配置
+#   cp yunpan-relay.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now yunpan-relay
+[Unit]
+Description=云链盘中继端（内网穿透）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/yunpan-relay --config /etc/yunpan/relay.toml
+Restart=on-failure
+RestartSec=3
+# 非 root 跑。注意：这意味着白名单里不能有 1024 以下的端口
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

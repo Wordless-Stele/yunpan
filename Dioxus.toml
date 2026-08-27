@@ -1,0 +1,10 @@
+[application]
+# dx 0.7 要求 [application] 表存在（哪怕为空）。
+# 产物名（.app / NSIS 显示名）从 Cargo.toml 的 [package].name 派生。
+
+[bundle]
+identifier = "top.zhoumaosen.yunpan"
+publisher = "ZHOUMAOSEN"
+
+[web.app]
+title = "云链盘"

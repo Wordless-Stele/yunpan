@@ -1,0 +1,19 @@
+[package]
+name = "yunpan-tunnel"
+version = "0.1.0"
+edition = "2021"
+description = "云链盘内网穿透隧道：客户端与中继共用的协议实现"
+publish = false
+
+[dependencies]
+anyhow = "1"
+hmac = "0.12"
+log = "0.4"
+rand = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt", "net", "io-util", "time", "sync", "macros"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "time"] }
