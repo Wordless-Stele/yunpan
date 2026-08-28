@@ -190,7 +190,7 @@ pub async fn do_start(
     let cfg = cfg_sig.peek().clone();
     if cfg.serve_path.is_empty() {
         share.set(ShareStatus::Failed {
-            reason: "还没选要共享的文件夹".into(),
+            reason: "尚未选择要共享的文件夹".into(),
         });
         return;
     }

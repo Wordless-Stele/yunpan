@@ -89,18 +89,18 @@ pub fn ShareView() -> Element {
                 }
             }
             if cfg().serve_path.is_empty() && !running {
-                p { class: "hint", style: "margin-top:8px", "先在下面选一个要共享的文件夹。" }
+                p { class: "hint", style: "margin-top:8px", "请先在下方选择需要共享的文件夹。" }
             }
             if dirty {
                 p { class: "hint warn", style: "margin-top:8px",
-                    "设置已改动，点「启动共享」重启后生效。"
+                    "配置已修改，重新启动共享后生效。"
                 }
             }
         }
 
         if let ShareStatus::Running { urls } = &status {
             section { class: "card",
-                h3 { "访问地址（点地址显示二维码，手机扫码直连）" }
+                h3 { "访问地址（点击地址显示二维码）" }
                 for url in urls.iter().map(|u| u.to_string()) {
                     {
                         let url_for_qr = url.clone();
@@ -169,7 +169,7 @@ pub fn ShareView() -> Element {
                 input {
                     r#type: "text",
                     readonly: true,
-                    placeholder: "还没选",
+                    placeholder: "未选择",
                     value: "{cfg().serve_path}",
                 }
                 button {
@@ -188,7 +188,7 @@ pub fn ShareView() -> Element {
                 }
             }
             div { class: "field",
-                label { "端口" }
+                label { "本机端口" }
                 input {
                     r#type: "number",
                     min: "1",
@@ -207,7 +207,7 @@ pub fn ShareView() -> Element {
                 }
             }
             div { class: "field",
-                label { "访客权限" }
+                label { "访问范围" }
                 div { class: "checks",
                     label { class: "check",
                         input {
@@ -220,8 +220,13 @@ pub fn ShareView() -> Element {
                                 cfg.set(c);
                             },
                         }
-                        "局域网可见"
+                        "允许局域网设备访问"
                     }
+                }
+            }
+            div { class: "field",
+                label { "功能权限" }
+                div { class: "checks",
                     label { class: "check",
                         input {
                             r#type: "checkbox",
@@ -272,19 +277,23 @@ pub fn ShareView() -> Element {
                                 cfg.set(c);
                             },
                         }
-                        "允许整夹打包下载"
+                        "允许打包下载"
                     }
                 }
+            }
+            p { class: "hint",
+                "本机端口为文件服务在本机的监听端口，局域网访问与公网中继均经由该端口。"
+                "功能权限对所有访问者生效；设置访问密码后，上传、删除等写入操作仅登录用户可执行。"
             }
         }
 
         section { class: "card",
-            h3 { "访问密码（留空 = 不设密码）" }
+            h3 { "访问密码（留空表示不设密码）" }
             div { class: "field",
                 label { "账号" }
                 input {
                     r#type: "text",
-                    placeholder: "如 boss",
+                    placeholder: "用户名",
                     value: "{cfg().auth_user}",
                     oninput: move |e| {
                         let mut c = cfg();
@@ -321,12 +330,12 @@ pub fn ShareView() -> Element {
                                 cfg.set(c);
                             },
                         }
-                        "没登录的访客可以只读浏览"
+                        "允许未登录访客只读浏览"
                     }
                 }
             }
             p { class: "hint",
-                "设了密码后，上传/删除等写操作只有登录后才能做；访客要么只读、要么完全进不来，由上面的勾决定。"
+                "设置密码后，上传、删除等写入操作仅登录用户可执行；未登录访客能否只读浏览，由上方选项决定。"
             }
         }
 
@@ -350,7 +359,7 @@ pub fn ShareView() -> Element {
                             }
                         },
                     }
-                    "开机自动启动（静默进托盘，不弹窗口）"
+                    "开机自动启动（启动后驻留系统托盘，不显示主窗口）"
                 }
             }
             if !autostart_err().is_empty() {

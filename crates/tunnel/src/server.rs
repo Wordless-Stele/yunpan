@@ -428,7 +428,7 @@ impl Relay {
             .map(|c| c.ports.contains(&remote_port))
             .unwrap_or(false);
         if !allowed {
-            bail!("端口 {remote_port} 不在该客户端的白名单里");
+            bail!("端口 {remote_port} 不在该客户端的端口白名单内");
         }
 
         let addr = SocketAddr::new(self.cfg.visitor_bind.unwrap_or(self.cfg.bind), remote_port);

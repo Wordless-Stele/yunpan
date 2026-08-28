@@ -21,9 +21,9 @@ pub fn LogsView() -> Element {
 
     rsx! {
         section { class: "card",
-            h3 { "运行日志（最近 500 条，新的在上面）" }
+            h3 { "运行日志（最近 500 条，最新在前）" }
             if lines().is_empty() {
-                div { class: "empty", "还没有日志。启动共享后，谁来看过、下过什么都会记在这里。" }
+                div { class: "empty", "暂无日志。启动共享后，访问与传输记录将显示于此。" }
             } else {
                 div { class: "log-list",
                     for line in lines() {

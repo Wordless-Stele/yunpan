@@ -251,7 +251,7 @@ async fn connect_relay(cfg: &ClientConfig) -> Result<BoxStream> {
     .await
     .with_context(|| "TLS 握手超时")?
     .with_context(|| {
-        "TLS 握手失败——中继可能没配证书，或证书与填的域名对不上；         中继确实没开 TLS 的话，把「加密连接」关掉"
+        "TLS 握手失败：中继服务器可能未配置证书，或证书与所填域名不符；若中继未启用 TLS，请关闭「TLS 加密」"
     })?;
     Ok(Box::new(stream))
 }
