@@ -1,0 +1,23 @@
+name: Build Relay (self-hosted)
+
+# 只编 Linux 中继二进制，跑在自建 runner 上（与 parkwise 同一台，产物部署到
+# 8.155.35.38 已被 parkwise 生产验证过 glibc 兼容）。手动触发，产物走 artifact。
+# 生产服务器不装工具链——它只收编好的二进制。
+on:
+  workflow_dispatch:
+
+jobs:
+  relay:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build
+        run: cargo build --release -p yunpan-relay
+      - name: Sanity
+        run: |
+          file target/release/yunpan-relay
+          target/release/yunpan-relay --help | head -3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yunpan-relay-linux-x64
+          path: target/release/yunpan-relay
