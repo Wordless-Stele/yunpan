@@ -45,7 +45,12 @@ pub async fn start_share(cfg: &AppConfig) -> Result<Vec<String>, String> {
         }
         let args = dufs_core::Args::from_yaml(&yaml).map_err(|e| format!("{e:#}"))?;
         let server = dufs_core::serve(args).map_err(|e| format!("{e:#}"))?;
-        let urls = server.urls().to_vec();
+        let urls: Vec<String> = server
+            .urls()
+            .iter()
+            .filter(|u| url_worth_showing(u))
+            .cloned()
+            .collect();
         *slot = Some(server);
         log::info!("共享已启动：{}", urls.join("  "));
         Ok(urls)
@@ -55,6 +60,15 @@ pub async fn start_share(cfg: &AppConfig) -> Result<Vec<String>, String> {
 }
 
 /// 停掉 dufs（连同在途下载一起断开）。没在跑就什么也不做。
+/// 这个地址值不值得摆到界面上、进二维码。
+///
+/// dufs 枚举全部网卡，其中两类是「陷阱地址」：代理 TUN 的保留段 198.18.0.0/15
+/// （fake-ip 网关，点开只会得到空响应，还会进浏览器历史被自动补全坑人——
+/// 用户真的中过招）和 169.254.0.0/16 链路本地地址（没配上 DHCP 的网卡）。
+pub fn url_worth_showing(url: &str) -> bool {
+    !(url.contains("//198.18.") || url.contains("//198.19.") || url.contains("//169.254."))
+}
+
 pub async fn stop_share() {
     let _ = RT
         .spawn(async {
@@ -93,4 +107,24 @@ pub async fn stop_tunnel() {
             }
         })
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::url_worth_showing;
+
+    #[test]
+    fn 代理假地址与链路本地地址不上界面() {
+        assert!(!url_worth_showing("http://198.18.0.1:5700/mac/"));
+        assert!(!url_worth_showing("http://198.19.5.2:5700/"));
+        assert!(!url_worth_showing("http://169.254.170.142:5700/"));
+    }
+
+    #[test]
+    fn 正常地址都保留() {
+        assert!(url_worth_showing("http://192.168.110.30:5700/mac/"));
+        assert!(url_worth_showing("http://127.0.0.1:5700/"));
+        assert!(url_worth_showing("http://100.99.233.6:5700/"), "Tailscale 地址有用，得留着");
+        assert!(url_worth_showing("https://yp.yizuw.cn/mac/"));
+    }
 }
