@@ -116,3 +116,11 @@ systemctl daemon-reload && systemctl enable --now yunpan-relay
 - 中继掉线自动重连（指数退避 1→30s）；令牌错、端口不在白名单这类**配置错误不重试**，
   界面上停在红色 Fatal 状态等人改。
 - 升级 dufs：照 `crates/dufs-core/README.md` 的四处改动清单重做，别顺手改 vendor 文件。
+
+## 许可证
+
+云链盘以 **GPL-3.0-only** 开源（见 [LICENSE](LICENSE)）。
+
+例外：[`crates/dufs-core`](crates/dufs-core) 是上游 [dufs](https://github.com/sigoden/dufs)
+的 vendored 代码，保持其原始双许可 **MIT OR Apache-2.0**（与 GPL-3.0 兼容，
+许可证文本随目录携带）。整体作品的分发遵循 GPL-3.0。

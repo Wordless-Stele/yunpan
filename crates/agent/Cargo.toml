@@ -3,6 +3,7 @@ name = "yunpan-agent"
 version = "0.1.0"
 edition = "2021"
 description = "云链盘 MCP Agent：让 AI 通过 MCP 工具上传/下载/检索共享盘里的文件"
+license = "GPL-3.0-only"
 publish = false
 
 [[bin]]

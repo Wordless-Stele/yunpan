@@ -3,7 +3,7 @@ name: Build & Release
 # 三个产物，全部 x86_64：
 #   客户端 Linux   → ubuntu-22.04 托管 runner（22.04 的 glibc 老，deb/AppImage 能跑在更多发行版上）
 #   客户端 Windows → windows-latest 托管 runner（NSIS 安装包；ring/liblzma 必须原生编）
-#   中继 Linux     → 自建 runner（与生产机 8.155.35.38 的 glibc 兼容已被 parkwise 验证）
+#   中继 Linux     → 自建 runner（与生产机 生产机 的 glibc 兼容已被 parkwise 验证）
 # 推 v* 标签构建并发 Release；Actions 页手动触发只构建不发版。
 # 平时只更新中继用 build-relay.yml（自建 runner，零计费秒排队）。
 on:

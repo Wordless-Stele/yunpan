@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["ZHOUMAOSEN"]
 description = "云链盘 —— 内嵌 dufs 的文件共享端，带系统托盘与内网穿透"
+license = "GPL-3.0-only"
 publish = false
 
 # 根包就是 Windows 端 GUI，成员是被它内嵌的库与中继端二进制。

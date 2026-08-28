@@ -3,6 +3,7 @@ name = "yunpan-relay"
 version = "0.1.0"
 edition = "2021"
 description = "云链盘中继端：跑在公网 Linux 服务器上的内网穿透中继"
+license = "GPL-3.0-only"
 publish = false
 
 [[bin]]

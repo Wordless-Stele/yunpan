@@ -3,6 +3,7 @@ name = "yunpan-tunnel"
 version = "0.1.0"
 edition = "2021"
 description = "云链盘内网穿透隧道：客户端与中继共用的协议实现"
+license = "GPL-3.0-only"
 publish = false
 
 [dependencies]
