@@ -16,6 +16,8 @@ pub fn ShareView() -> Element {
     // 开机自启：OS（plist/注册表/.desktop 是否存在）是唯一真相，进来时读一次
     let mut autostart_on = use_signal(crate::autostart::is_enabled);
     let mut autostart_err = use_signal(String::new);
+    // hook 统一取在组件顶部，不散落在 rsx 里
+    let mut tab = use_context::<Signal<crate::Tab>>();
 
     let status = share();
     let running = matches!(status, ShareStatus::Running { .. });
@@ -39,6 +41,31 @@ pub fn ShareView() -> Element {
                     "{state_text}"
                     if let ShareStatus::Running { .. } = &status {
                         div { class: "sub", "文件夹：{cfg().serve_path}" }
+                    }
+                }
+                // 中继状态徽章：一眼看到公网通没通，点击跳中继页
+                {
+                    let (chip_cls, chip_txt): (&str, String) = if !cfg().relay.enabled {
+                        ("chip", "中继 未启用".into())
+                    } else {
+                        match relay_state() {
+                            RelayStatus::Idle => ("chip", "中继 待命".into()),
+                            RelayStatus::Connecting => ("chip busy", "中继 连接中".into()),
+                            RelayStatus::Online { .. } => ("chip on", "中继 已打通".into()),
+                            RelayStatus::Retrying { attempt, .. } => {
+                                ("chip busy", format!("中继 重连中 {attempt}"))
+                            }
+                            RelayStatus::Fatal { .. } => ("chip err", "中继 失败".into()),
+                        }
+                    };
+                    rsx! {
+                        button {
+                            class: "{chip_cls}",
+                            title: "点击查看中继详情",
+                            onclick: move |_| tab.set(crate::Tab::Relay),
+                            span { class: "mini" }
+                            "{chip_txt}"
+                        }
                     }
                 }
                 if running || starting {

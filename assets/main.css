@@ -134,3 +134,17 @@ input, textarea { -webkit-user-select: text; user-select: text; }
 .log-line.error .log-text { color: var(--accent); font-weight: 700; }
 .log-text { word-break: break-all; -webkit-user-select: text; user-select: text; }
 .empty { color: var(--ink-2); text-align: center; padding: 36px 0; font-size: 12px; letter-spacing: .08em; }
+
+/* ── 中继状态徽章（共享页 hero 行，点击跳中继页）── */
+.chip {
+  display: flex; align-items: center; gap: 7px; flex: none;
+  padding: 8px 12px; border: 1px solid var(--hairline); background: none;
+  font-size: 11px; letter-spacing: .1em; color: var(--ink-2); cursor: pointer;
+}
+.chip:hover { border-color: var(--ink); color: var(--ink); }
+.chip .mini { width: 8px; height: 8px; border: 2px solid var(--ink-2); flex: none; }
+.chip.on { color: var(--ink); }
+.chip.on .mini { border-color: var(--accent); background: var(--accent); }
+.chip.busy .mini { border-color: var(--ink); background: var(--ink); animation: blink 1s steps(2) infinite; }
+.chip.err { color: var(--accent); }
+.chip.err .mini { border-color: var(--accent); }

@@ -243,7 +243,7 @@ pub async fn do_stop(
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Tab {
+pub enum Tab {
     Share,
     Relay,
     Logs,
@@ -255,7 +255,8 @@ fn App() -> Element {
     let share = use_context_provider(|| Signal::new(ShareStatus::Stopped));
     let relay_state = use_context_provider(|| Signal::new(RelayStatus::Idle));
     let started_with = use_context_provider(|| Signal::new(None::<AppConfig>));
-    let mut tab = use_signal(|| Tab::Share);
+    // 进 context：共享页的中继状态徽章要能跳到中继页
+    let mut tab = use_context_provider(|| Signal::new(Tab::Share));
 
     // ── 系统托盘 ──
     #[cfg(feature = "desktop")]
