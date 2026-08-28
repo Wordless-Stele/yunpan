@@ -23,6 +23,8 @@ pub struct AppConfig {
     pub auth_user: String,
     pub auth_pass: String,
     pub guest_readonly: bool,
+    /// 打开软件即自动开启共享。与「开机自动启动」配合，登录后即在托盘后台共享。
+    pub auto_start_share: bool,
     pub relay: RelaySettings,
 }
 
@@ -56,6 +58,7 @@ impl Default for AppConfig {
             auth_user: String::new(),
             auth_pass: String::new(),
             guest_readonly: true,
+            auto_start_share: false,
             relay: RelaySettings::default(),
         }
     }
@@ -229,6 +232,14 @@ mod tests {
         assert!(cfg.tunnel_config().unwrap().tls);
         cfg.relay.tls = false;
         assert!(!cfg.tunnel_config().unwrap().tls);
+    }
+
+    #[test]
+    fn 旧版配置文件没有新字段也能读进来() {
+        // serde(default)：升级后首次启动读旧 config.json 不得报错
+        let cfg: AppConfig = serde_json::from_str(r#"{"port": 5700}"#).unwrap();
+        assert_eq!(cfg.port, 5700);
+        assert!(!cfg.auto_start_share, "新字段应默认关闭");
     }
 
     #[test]

@@ -362,8 +362,27 @@ pub fn ShareView() -> Element {
                     "开机自动启动（启动后驻留系统托盘，不显示主窗口）"
                 }
             }
+            div { class: "field",
+                label { "" }
+                label { class: "check",
+                    input {
+                        r#type: "checkbox",
+                        checked: cfg().auto_start_share,
+                        onchange: move |e| {
+                            let mut c = cfg();
+                            c.auto_start_share = e.value().parse().unwrap_or(false);
+                            c.save();
+                            cfg.set(c);
+                        },
+                    }
+                    "打开软件时自动开启共享"
+                }
+            }
             if !autostart_err().is_empty() {
                 p { class: "hint err", "{autostart_err}" }
+            }
+            p { class: "hint",
+                "两项同时勾选时，登录系统后即在托盘后台自动共享，无需任何操作。"
             }
         }
     }

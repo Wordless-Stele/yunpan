@@ -258,6 +258,15 @@ fn App() -> Element {
     // 进 context：共享页的中继状态徽章要能跳到中继页
     let mut tab = use_context_provider(|| Signal::new(Tab::Share));
 
+    // 打开软件即开启服务：配置勾选时，挂载后自动执行一次「启动共享」。
+    // 开机自启（--hidden 进托盘）+ 本选项 = 登录后无人值守自动共享
+    use_future(move || async move {
+        let want = cfg.peek().auto_start_share && !cfg.peek().serve_path.is_empty();
+        if want && matches!(*share.peek(), ShareStatus::Stopped) {
+            do_start(cfg, share, relay_state, started_with).await;
+        }
+    });
+
     // ── 系统托盘 ──
     #[cfg(feature = "desktop")]
     {
