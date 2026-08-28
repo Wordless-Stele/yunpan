@@ -5,9 +5,21 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-async fn free_port() -> u16 {
-    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    l.local_addr().unwrap().port()
+/// 挑一个可用端口。不用「bind 0 读回端口再释放」——workspace 并发跑多个测试
+/// 进程时，释放到复用的空当里内核会把同一个端口分给别人（实测撞过）。
+/// 改成 PID 加盐的候选序列 + 探测循环：各进程各扫各的序列，互不相撞；
+/// 候选压在 49152 以下，内核给出站连接随机分配的临时端口也永远撞不进来。
+fn free_port() -> u16 {
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    loop {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let candidate = (17000 + (std::process::id().wrapping_mul(61) + n * 13) % 30000) as u16;
+        if TcpListener::bind(("127.0.0.1", candidate)).is_ok() {
+            return candidate;
+        }
+    }
 }
 
 async fn http_get(port: u16, path: &str) -> String {
@@ -27,7 +39,7 @@ async fn 起服务_能拿到目录页_停机后端口立即可复用() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("你好.txt"), "云链盘冒烟测试").unwrap();
 
-    let port = free_port().await;
+    let port = free_port();
     let yaml = format!("serve-path: {}\nbind: 127.0.0.1\nport: {port}\n", dir.display());
     let args = dufs_core::Args::from_yaml(&yaml).unwrap();
     let server = dufs_core::serve(args).unwrap();

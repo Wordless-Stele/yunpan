@@ -24,6 +24,11 @@ script 问题不是代码问题）；推 `v*` 标签走 `.github/workflows/relea
 
 ## 结构与关键约束
 
+- `crates/agent`（`yunpan-agent`）：手写的极简 MCP stdio 服务端（initialize /
+  tools/list / tools/call / ping，按行分帧），不拉 SDK。工具失败走 `isError`
+  工具结果不走 JSON-RPC error——模型要能读到中文原因。bin crate 没有 lib，
+  e2e 测试用 `#[path]` 把 src 模块直接编进来。stdout 是协议通道，日志只准 stderr。
+
 - `src/engine.rs`：dufs 与隧道跑在**专属 tokio 运行时**（`RT`）上，不借 Dioxus 的
   执行器——大目录打包不能卡 UI。所有启停都是 `RT.spawn(...).await`，幂等（先停旧的）。
 - `src/logbus.rs`：全进程唯一的 `log` logger。dufs-core 特意不带上游 logger.rs，

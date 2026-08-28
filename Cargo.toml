@@ -10,7 +10,7 @@ publish = false
 # 中继端虽然只跑在 Linux，但代码是纯 Rust，Mac 上也编得过 —— 这样本机就能起一个
 # 中继做端到端联调，不必每次都往服务器上传。
 [workspace]
-members = ["crates/dufs-core", "crates/tunnel", "crates/relay-server"]
+members = ["crates/agent", "crates/dufs-core", "crates/tunnel", "crates/relay-server"]
 
 [dependencies]
 dioxus = { version = "0.7.10", features = ["router"] }

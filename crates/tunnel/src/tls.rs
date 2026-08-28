@@ -21,6 +21,20 @@ pub trait Rw: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Rw for T {}
 pub type BoxStream = Box<dyn Rw>;
 
+/// 显式选定 ring 为进程级加密后端。
+///
+/// workspace 里 agent 的 reqwest 会把 rustls 的 aws-lc-rs 特性拉进统一特性图，
+/// 与我们的 ring 并存——两个后端同时可用时 rustls 拒绝自动选择，谁先建
+/// TLS 配置谁 panic（整仓 cargo test 必现，单测 crate 不现）。首次用到时装一次，
+/// 已装过（无论谁装的）就沿用。
+fn ensure_crypto_provider() {
+    use tokio_rustls::rustls::crypto::{ring, CryptoProvider};
+    if CryptoProvider::get_default().is_none() {
+        // 并发时装晚了会 Err——说明别人已装好，同样是可用状态
+        let _ = ring::default_provider().install_default();
+    }
+}
+
 pub fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
     let mut certs = vec![];
     for cert in CertificateDer::pem_file_iter(path)
@@ -38,6 +52,7 @@ pub fn load_private_key(path: &Path) -> Result<PrivateKeyDer<'static>> {
 
 /// 中继侧：由证书+私钥构造 TLS 接受器。
 pub fn make_acceptor(cert_path: &Path, key_path: &Path) -> Result<TlsAcceptor> {
+    ensure_crypto_provider();
     let certs = load_certs(cert_path)?;
     let key = load_private_key(key_path)?;
     let config = ServerConfig::builder()
@@ -49,6 +64,7 @@ pub fn make_acceptor(cert_path: &Path, key_path: &Path) -> Result<TlsAcceptor> {
 
 /// 客户端侧：系统根证书（webpki）+ 可选的额外信任锚（测试/自签中继用）。
 pub fn make_connector(extra_trust_der: Option<&[u8]>) -> Result<TlsConnector> {
+    ensure_crypto_provider();
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     if let Some(der) = extra_trust_der {

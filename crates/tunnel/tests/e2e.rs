@@ -9,10 +9,21 @@ use yunpan_tunnel::{ClientAuth, ClientConfig, Relay, RelayConfig, RelayStatus};
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
-/// 找一个空闲端口。bind 到 0 再读回来，比写死端口稳。
-async fn free_port() -> u16 {
-    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    l.local_addr().unwrap().port()
+/// 挑一个可用端口。不用「bind 0 读回端口再释放」——workspace 并发跑多个测试
+/// 进程时，释放到复用的空当里内核会把同一个端口分给别人（实测撞过）。
+/// 改成 PID 加盐的候选序列 + 探测循环：各进程各扫各的序列，互不相撞；
+/// 候选压在 49152 以下，内核给出站连接随机分配的临时端口也永远撞不进来。
+fn free_port() -> u16 {
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    loop {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let candidate = (17000 + (std::process::id().wrapping_mul(61) + n * 13) % 30000) as u16;
+        if TcpListener::bind(("127.0.0.1", candidate)).is_ok() {
+            return candidate;
+        }
+    }
 }
 
 /// 假 dufs：收什么回什么，连接断了就算完。
@@ -40,9 +51,9 @@ async fn spawn_echo(port: u16) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn 从公网端口进的字节原样从本地服务回来() {
-    let control_port = free_port().await;
-    let remote_port = free_port().await;
-    let local_port = free_port().await;
+    let control_port = free_port();
+    let remote_port = free_port();
+    let local_port = free_port();
 
     spawn_echo(local_port).await;
 
@@ -104,7 +115,7 @@ async fn 从公网端口进的字节原样从本地服务回来() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn 令牌错误的客户端会停在_fatal_而不是无限重试() {
-    let control_port = free_port().await;
+    let control_port = free_port();
     let relay = Arc::new(Relay::new(RelayConfig {
         bind: "127.0.0.1".parse().unwrap(),
         control_port,
@@ -156,9 +167,9 @@ async fn 开了_tls_后三段连接都加密且字节原样往返() {
     use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
     use tokio_rustls::rustls::{ClientConfig as RustlsClientConfig, RootCertStore};
 
-    let control_port = free_port().await;
-    let remote_port = free_port().await;
-    let local_port = free_port().await;
+    let control_port = free_port();
+    let remote_port = free_port();
+    let local_port = free_port();
     spawn_echo(local_port).await;
 
     // 自签证书写进临时文件，喂给中继

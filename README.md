@@ -38,6 +38,24 @@ cargo build --release -p yunpan-relay     # 中继端（Linux 上跑；Mac 编�
 标签触发）：ring、liblzma 这些 C 依赖从 Mac 交叉编 MSVC 编不过，本机 `cargo check
 --target x86_64-pc-windows-msvc` 会死在 build script 上，不是代码问题。
 
+## 给 AI 用：MCP Agent
+
+`crates/agent` 产出 `yunpan-agent`——一个 stdio MCP server，注册后 AI（Claude Code
+或任何 MCP 客户端）就有了 `upload_file` / `download_file` / `list_dir` / `search` /
+`make_dir` / `delete` / `status` 七个工具，直接对 dufs 的 HTTP API 干活：
+
+```bash
+cargo build --release -p yunpan-agent
+# 本机（读桌面端 config.json，直连 127.0.0.1:端口）：
+claude mcp add yunpan -- ~/RustLab/YunPan/target/release/yunpan-agent
+# 远程（AI 在别的机器，走中继地址）：
+claude mcp add yunpan -e YUNPAN_BASE_URL=https://relay.example.com:8080     -e YUNPAN_USER=boss -e YUNPAN_PASS=xxx -- /path/to/yunpan-agent
+```
+
+鉴权用 Basic（dufs 默认发 Digest 质询但一直认 Basic）；共享没启动、没权限、
+要密码这些失败都以中文文案回给模型（`isError` 工具结果），模型能自行调整。
+另外 dufs 本来就是 curl 友好的——没有 MCP 的场合，`curl -T 文件 地址` 照样能传。
+
 ## 中继端部署（Linux）
 
 ```bash
