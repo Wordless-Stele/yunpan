@@ -301,6 +301,9 @@ async fn 一台中继两个客户端各走各的端口互不串() {
                          public_url: Some("https://pan.example.com".into()) },
             ClientAuth { id: "yi".into(), token: "fedcba9876543210fedcba9876543210".into(), ports: vec![port_b],
                          public_url: None },
+            // 丙只用于下面的越权场景：白名单里没有甲的端口
+            ClientAuth { id: "bing".into(), token: "00112233445566770011223344556677".into(), ports: vec![port_b],
+                         public_url: None },
         ],
     }).unwrap());
     tokio::spawn(relay.run());
@@ -346,8 +349,10 @@ async fn 一台中继两个客户端各走各的端口互不串() {
     assert_eq!(ask(port_a, "ping").await, "甲:ping", "A 端口串到别人家了");
     assert_eq!(ask(port_b, "ping").await, "乙:ping", "B 端口串到别人家了");
 
-    // 乙的令牌去申请甲的端口：白名单必须拦下
-    let h_rogue = yunpan_tunnel::client::spawn(make("yi", "fedcba9876543210fedcba9876543210", port_a, local_b));
+    // 丙的令牌去申请甲的端口：白名单必须拦下。
+    // 不能复用乙的身份——同 id 上线会互相顶替，正牌乙的自动重连和冒充者
+    // 会互踢形成时序竞态（本机多核几乎撞不上，CI 双核必现超时）
+    let h_rogue = yunpan_tunnel::client::spawn(make("bing", "00112233445566770011223344556677", port_a, local_b));
     let mut status = h_rogue.status.clone();
     let fatal = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
