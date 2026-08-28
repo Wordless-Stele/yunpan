@@ -7,5 +7,11 @@ identifier = "top.zhoumaosen.yunpan"
 publisher = "ZHOUMAOSEN"
 icon = ["assets/icon.ico", "assets/icon.png"]
 
+# WebView2 用「联网下载引导器」而不是内嵌完整离线安装器——后者是 dx 的默认，
+# 会把 189MB 的 MicrosoftEdgeWebView2RuntimeInstaller 塞进 NSIS，安装包从
+# ~17MB 膨胀到 193MB。Win11 与新 Win10 都自带 WebView2，引导器基本不会被用到
+[bundle.windows]
+webview_install_mode = { DownloadBootstrapper = { silent = true } }
+
 [web.app]
 title = "云链盘"
