@@ -197,10 +197,12 @@ async fn session(
 
         match msg {
             ServerMsg::Ping { ts } => write_msg(&mut stream, &ClientMsg::Pong { ts }).await?,
-            ServerMsg::BindOk { remote_port, .. } => {
-                // 中继的 TLS 是全端口一把闸：隧道走 TLS，访客那头就必然是 HTTPS
-                let scheme = if cfg.tls { "https" } else { "http" };
-                let public_url = format!("{scheme}://{}:{}", cfg.relay_host, remote_port);
+            ServerMsg::BindOk { remote_port, public_url, .. } => {
+                // 中继下发了展示地址（nginx 反代形态）就用它；否则按端口自己拼
+                let public_url = public_url.unwrap_or_else(|| {
+                    let scheme = if cfg.tls { "https" } else { "http" };
+                    format!("{scheme}://{}:{}", cfg.relay_host, remote_port)
+                });
                 log::info!("中继已打通：{public_url}");
                 let _ = status_tx.send(RelayStatus::Online { public_url });
             }

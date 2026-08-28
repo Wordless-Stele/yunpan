@@ -50,6 +50,10 @@ pub struct RelayConfig {
     pub tls_cert: Option<PathBuf>,
     #[serde(default)]
     pub tls_key: Option<PathBuf>,
+    /// 访客端口的绑定地址，缺省与 `bind` 相同。访客流量经 nginx 反代时设成
+    /// `127.0.0.1`——端口只对本机 nginx 可见，安全组一个访客端口都不用开。
+    #[serde(default)]
+    pub visitor_bind: Option<IpAddr>,
     pub clients: Vec<ClientAuth>,
 }
 
@@ -72,6 +76,10 @@ pub struct ClientAuth {
     /// 不是摆设：没有白名单的话，任何一个拿到令牌的客户端都能把中继上的 22 或 443
     /// 抢过去（进程若以 root 跑更是直接劫持），一个客户端被攻破就等于整台服务器失守。
     pub ports: Vec<u16>,
+    /// 访客实际访问的地址（如 `https://yp.yizuw.cn`）。经 nginx 反代时必填，
+    /// 客户端界面与二维码都显示它；不填则客户端按端口自己拼。
+    #[serde(default)]
+    pub public_url: Option<String>,
 }
 
 /// 等待客户端回连接管的访客连接（可能已套 TLS，装箱抹平）。
@@ -337,8 +345,11 @@ impl Relay {
                             ).await {
                                 Ok(handle) => {
                                     listeners.push(handle);
+                                    let public_url = self
+                                        .client(&client_id)
+                                        .and_then(|c| c.public_url.clone());
                                     write_msg(&mut stream, &ServerMsg::BindOk {
-                                        name: name.clone(), remote_port,
+                                        name: name.clone(), remote_port, public_url,
                                     }).await?;
                                     log::info!(
                                         "已把 {}:{remote_port} 指给客户端 {client_id} 的「{name}」",
@@ -401,7 +412,7 @@ impl Relay {
             bail!("端口 {remote_port} 不在该客户端的白名单里");
         }
 
-        let addr = SocketAddr::new(self.cfg.bind, remote_port);
+        let addr = SocketAddr::new(self.cfg.visitor_bind.unwrap_or(self.cfg.bind), remote_port);
         let listener = TcpListener::bind(addr)
             .await
             .with_context(|| format!("监听 {addr} 失败"))?;

@@ -43,7 +43,8 @@ use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// 协议版本。两端不一致直接拒绝——宁可报错，也别让半兼容的两版互相猜对方的意思。
-pub const PROTO_VERSION: u16 = 1;
+/// v2：BindOk 增加 public_url（中继告诉客户端访客该用哪个地址，配合 nginx 443 反代）。
+pub const PROTO_VERSION: u16 = 2;
 
 /// 单帧上限。控制帧都是几十字节的 JSON，64 KiB 足够到离谱；设上限是为了防止
 /// 有人往控制端口上灌一个天文数字的长度前缀，把中继的内存吃光。
@@ -100,7 +101,10 @@ pub enum ServerMsg {
     Challenge { nonce: String },
     AuthOk { server: String, heartbeat_secs: u64 },
     AuthErr { reason: String },
-    BindOk { name: String, remote_port: u16 },
+    /// `public_url`：访客实际该访问的地址。访客流量经 nginx 443 反代时，
+    /// 真实入口不是 `中继:remote_port` 而是 nginx 的门面——只有中继自己知道，
+    /// 所以由它下发；None 则客户端按 `scheme://中继:remote_port` 兜底拼。
+    BindOk { name: String, remote_port: u16, public_url: Option<String> },
     BindErr { name: String, reason: String },
     /// 有访客进来了，客户端应当立刻发起一条 [`Role::Data`] 连接来接管。
     NewConn { conn_id: u64, name: String, peer: String },

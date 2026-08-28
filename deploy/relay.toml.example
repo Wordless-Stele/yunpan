@@ -23,6 +23,12 @@ public_host = "relay.example.com"
 tls_cert = "/etc/yunpan/fullchain.pem"
 tls_key = "/etc/yunpan/privkey.pem"
 
+# 访客流量走 nginx 443 反代的形态（安全组只用开控制端口）：
+# 访客端口绑回环、只对本机 nginx 可见，client 里配 public_url 告诉桌面端
+# 访客实际该用的地址。nginx 侧 proxy_pass http://127.0.0.1:<端口>，
+# 记得 client_max_body_size 0 + proxy_request_buffering off（大文件流式上传）。
+# visitor_bind = "127.0.0.1"
+
 # 每台要穿透的机器登记一条。令牌用 `yunpan-relay token` 生成。
 # ports 是该客户端允许申请的公网端口白名单——没有白名单的话，任何拿到令牌的
 # 客户端都能抢走 22/443，一台失守等于整机失守。这些端口防火墙也要放行。
@@ -30,6 +36,8 @@ tls_key = "/etc/yunpan/privkey.pem"
 id = "office"
 token = "把 yunpan-relay token 的输出粘到这里"
 ports = [8080]
+# 经 nginx 反代时必填；不走反代就删掉这行，客户端自己按端口拼
+# public_url = "https://pan.example.com"
 
 # 多台机器就多写几条：一台中继带 N 个客户端，靠公网端口分流——
 # 访客打 :8080 到 office、:8081 到 home。三条纪律：id 不共用（同 id 再上线

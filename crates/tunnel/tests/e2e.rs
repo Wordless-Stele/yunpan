@@ -64,10 +64,12 @@ async fn 从公网端口进的字节原样从本地服务回来() {
         public_host: None,
         tls_cert: None,
         tls_key: None,
+        visitor_bind: None,
         clients: vec![ClientAuth {
             id: "test".into(),
             token: TOKEN.into(),
             ports: vec![remote_port],
+            public_url: None,
         }],
     }).unwrap());
     tokio::spawn(relay.run());
@@ -123,10 +125,12 @@ async fn 令牌错误的客户端会停在_fatal_而不是无限重试() {
         public_host: None,
         tls_cert: None,
         tls_key: None,
+        visitor_bind: None,
         clients: vec![ClientAuth {
             id: "test".into(),
             token: TOKEN.into(),
             ports: vec![18080],
+            public_url: None,
         }],
     }).unwrap());
     tokio::spawn(relay.run());
@@ -189,10 +193,12 @@ async fn 开了_tls_后三段连接都加密且字节原样往返() {
         public_host: None,
         tls_cert: Some(cert_path),
         tls_key: Some(key_path),
+        visitor_bind: None,
         clients: vec![ClientAuth {
             id: "test".into(),
             token: TOKEN.into(),
             ports: vec![remote_port],
+            public_url: None,
         }],
     }).unwrap());
     tokio::spawn(relay.run());
@@ -285,9 +291,12 @@ async fn 一台中继两个客户端各走各的端口互不串() {
         public_host: None,
         tls_cert: None,
         tls_key: None,
+        visitor_bind: None,
         clients: vec![
-            ClientAuth { id: "jia".into(), token: TOKEN.into(), ports: vec![port_a] },
-            ClientAuth { id: "yi".into(), token: "fedcba9876543210fedcba9876543210".into(), ports: vec![port_b] },
+            ClientAuth { id: "jia".into(), token: TOKEN.into(), ports: vec![port_a],
+                         public_url: Some("https://pan.example.com".into()) },
+            ClientAuth { id: "yi".into(), token: "fedcba9876543210fedcba9876543210".into(), ports: vec![port_b],
+                         public_url: None },
         ],
     }).unwrap());
     tokio::spawn(relay.run());
@@ -315,6 +324,10 @@ async fn 一台中继两个客户端各走各的端口互不串() {
                 status.changed().await.unwrap();
             }
         }).await.expect("5 秒内没能上线");
+    }
+    // 甲在中继侧配了 public_url（nginx 反代形态）：展示地址必须是下发的那个
+    if let RelayStatus::Online { public_url } = &*h_a.status.borrow() {
+        assert_eq!(public_url, "https://pan.example.com", "没用中继下发的展示地址");
     }
 
     // 各打各的公网端口，回声标签必须对得上
