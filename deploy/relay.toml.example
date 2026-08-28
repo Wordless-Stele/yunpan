@@ -30,3 +30,11 @@ tls_key = "/etc/yunpan/privkey.pem"
 id = "office"
 token = "把 yunpan-relay token 的输出粘到这里"
 ports = [8080]
+
+# 多台机器就多写几条：一台中继带 N 个客户端，靠公网端口分流——
+# 访客打 :8080 到 office、:8081 到 home。三条纪律：id 不共用（同 id 再上线
+# 会顶掉前一个）、端口白名单不交叉、令牌各自用 yunpan-relay token 生成。
+# [[clients]]
+# id = "home"
+# token = "另生成一个，别复用"
+# ports = [8081]
