@@ -23,6 +23,12 @@ public_host = "relay.example.com"
 tls_cert = "/etc/yunpan/fullchain.pem"
 tls_key = "/etc/yunpan/privkey.pem"
 
+# 路径路由（推荐）：一个共享访客端口按「/客户端名/」分流，客户端不占独立端口
+# （白名单留空即可），展示地址自动生成为 public_base_url/客户端名/。
+# 桌面端需勾选「路径前缀模式」。
+# path_router_port = 8080
+# public_base_url = "https://yp.example.com"
+
 # 访客流量走 nginx 443 反代的形态（安全组只用开控制端口）：
 # 访客端口绑回环、只对本机 nginx 可见，client 里配 public_url 告诉桌面端
 # 访客实际该用的地址。nginx 侧 proxy_pass http://127.0.0.1:<端口>，

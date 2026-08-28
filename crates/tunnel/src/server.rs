@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::io::copy_bidirectional;
+use tokio::io::{copy_bidirectional, AsyncReadExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::timeout;
@@ -54,6 +54,15 @@ pub struct RelayConfig {
     /// `127.0.0.1`——端口只对本机 nginx 可见，安全组一个访客端口都不用开。
     #[serde(default)]
     pub visitor_bind: Option<IpAddr>,
+    /// 路径路由：一个共享访客端口，按 URL 首段路径分流到各客户端——
+    /// `https://域名/<客户端id>/...` 即访问那台机器。开着时客户端可以不占独立端口
+    /// （白名单留空即可）。绑定地址与 TLS 跟随 visitor_bind / visitor_tls。
+    #[serde(default)]
+    pub path_router_port: Option<u16>,
+    /// 门面基地址（如 `https://yp.yizuw.cn`），用于为没写 public_url 的客户端
+    /// 生成默认展示地址 `<base>/<id>/`。仅路径路由模式用到。
+    #[serde(default)]
+    pub public_base_url: Option<String>,
     /// 访客端口是否套 TLS，缺省跟全局（配了证书就套）。经 nginx 反代时设 false：
     /// nginx 在 443 终结了 TLS，转进来的是明文 HTTP，访客端口再等 TLS 握手
     /// 就会把 nginx 的明文当坏 ClientHello 掐掉（症状：nginx 报
@@ -101,6 +110,8 @@ struct Pending {
 struct Session {
     shutdown_tx: watch::Sender<bool>,
     done_rx: watch::Receiver<bool>,
+    /// 路径路由按客户端 id 找到活会话后，经它把 NewConn 通知投给客户端。
+    event_tx: mpsc::Sender<ServerMsg>,
 }
 
 #[derive(Default)]
@@ -186,6 +197,16 @@ impl Relay {
         {
             let relay = self.clone();
             tokio::spawn(async move { relay.sweep_pending().await });
+        }
+
+        if let Some(port) = self.cfg.path_router_port {
+            let addr = SocketAddr::new(self.cfg.visitor_bind.unwrap_or(self.cfg.bind), port);
+            let listener = TcpListener::bind(addr)
+                .await
+                .with_context(|| format!("绑定路径路由端口 {addr} 失败"))?;
+            log::info!("路径路由已开启：{addr}，按 /<客户端名>/ 分流");
+            let relay = self.clone();
+            tokio::spawn(async move { relay.run_path_router(listener).await });
         }
 
         loop {
@@ -317,15 +338,15 @@ impl Relay {
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (done_tx, done_rx) = watch::channel(false);
+        let (event_tx, mut event_rx) = mpsc::channel::<ServerMsg>(64);
         self.sessions.lock().await.insert(
             client_id.clone(),
             Session {
                 shutdown_tx: shutdown_tx.clone(),
                 done_rx,
+                event_tx: event_tx.clone(),
             },
         );
-
-        let (event_tx, mut event_rx) = mpsc::channel::<ServerMsg>(64);
         let mut listeners: Vec<tokio::task::JoinHandle<()>> = vec![];
         let mut ticker = tokio::time::interval(Duration::from_secs(self.cfg.heartbeat_secs));
         let mut missed_pongs = 0u32;
@@ -358,17 +379,30 @@ impl Relay {
                     match msg {
                         Ok(ClientMsg::Pong { .. }) => missed_pongs = 0,
                         Ok(ClientMsg::Bind { name, remote_port }) => {
+                            // 路径路由模式下白名单为空的客户端不占独立端口：
+                            // 登记即完成，访客经共享路由端口按 /<id>/ 进来
+                            let ports_empty = self
+                                .client(&client_id)
+                                .map(|c| c.ports.is_empty())
+                                .unwrap_or(true);
+                            if self.cfg.path_router_port.is_some() && ports_empty {
+                                write_msg(&mut stream, &ServerMsg::BindOk {
+                                    name: name.clone(),
+                                    remote_port: 0,
+                                    public_url: self.public_url_for(&client_id),
+                                }).await?;
+                                log::info!("客户端 {client_id} 经路径路由接入（/{client_id}/）");
+                                continue;
+                            }
                             match self.clone().bind_public(
                                 &client_id, &name, remote_port,
                                 event_tx.clone(), shutdown_rx.clone(),
                             ).await {
                                 Ok(handle) => {
                                     listeners.push(handle);
-                                    let public_url = self
-                                        .client(&client_id)
-                                        .and_then(|c| c.public_url.clone());
                                     write_msg(&mut stream, &ServerMsg::BindOk {
-                                        name: name.clone(), remote_port, public_url,
+                                        name: name.clone(), remote_port,
+                                        public_url: self.public_url_for(&client_id),
                                     }).await?;
                                     log::info!(
                                         "已把 {}:{remote_port} 指给客户端 {client_id} 的「{name}」",
@@ -462,28 +496,124 @@ impl Relay {
                         continue;
                     }
                 };
-                let conn_id = relay.next_conn_id.fetch_add(1, Ordering::Relaxed);
-                relay.pending.lock().await.insert(
-                    conn_id,
-                    Pending {
-                        stream,
-                        peer,
-                        client_id: client_id.clone(),
-                        since: Instant::now(),
-                    },
-                );
-                let notice = ServerMsg::NewConn {
-                    conn_id,
-                    name: name.clone(),
-                    peer: peer.to_string(),
-                };
-                if event_tx.send(notice).await.is_err() {
+                if !relay
+                    .dispatch_visitor(&client_id, &name, stream, peer, &event_tx)
+                    .await
+                {
                     // 控制连接没了，这个端口也没有存在的意义
-                    relay.pending.lock().await.remove(&conn_id);
                     break;
                 }
             }
         }))
+    }
+
+    /// 访客连接挂进待配对表并通知客户端来接管。返回 false 表示控制连接已失效。
+    async fn dispatch_visitor(
+        &self,
+        client_id: &str,
+        name: &str,
+        stream: BoxStream,
+        peer: SocketAddr,
+        event_tx: &mpsc::Sender<ServerMsg>,
+    ) -> bool {
+        let conn_id = self.next_conn_id.fetch_add(1, Ordering::Relaxed);
+        self.pending.lock().await.insert(
+            conn_id,
+            Pending {
+                stream,
+                peer,
+                client_id: client_id.to_string(),
+                since: Instant::now(),
+            },
+        );
+        let notice = ServerMsg::NewConn {
+            conn_id,
+            name: name.to_string(),
+            peer: peer.to_string(),
+        };
+        if event_tx.send(notice).await.is_err() {
+            self.pending.lock().await.remove(&conn_id);
+            return false;
+        }
+        true
+    }
+
+    /// 客户端的展示地址：显式配置优先，否则路径路由模式下按 `<base>/<id>/` 生成。
+    fn public_url_for(&self, client_id: &str) -> Option<String> {
+        if let Some(url) = self.client(client_id).and_then(|c| c.public_url.clone()) {
+            return Some(url);
+        }
+        match (&self.cfg.path_router_port, &self.cfg.public_base_url) {
+            (Some(_), Some(base)) => {
+                Some(format!("{}/{client_id}/", base.trim_end_matches('/')))
+            }
+            _ => None,
+        }
+    }
+
+    /// 路径路由：共享访客端口上按 URL 首段分流。
+    ///
+    /// 只读到 HTTP 请求行就够做决定；已读的字节原样回放进隧道（见 [`PrefixedStream`]），
+    /// 后续字节裸转发。同一条连接（HTTP keep-alive）始终跟随首个请求的客户端——
+    /// dufs 页面内的链接都在自己的前缀下，浏览器不会跨前缀复用。
+    async fn run_path_router(self: Arc<Self>, listener: TcpListener) {
+        loop {
+            let Ok((tcp, peer)) = listener.accept().await else { continue };
+            let relay = self.clone();
+            tokio::spawn(async move {
+                let mut stream = match relay.maybe_visitor_tls(tcp).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::debug!("{peer} 的 TLS 握手没过：{e:#}");
+                        return;
+                    }
+                };
+                // 读首块（含请求行即可）。浏览器第一包必带完整请求行，8K 顶天
+                let mut buf = vec![0u8; 8192];
+                let n = match timeout(
+                    Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
+                    stream.read(&mut buf),
+                )
+                .await
+                {
+                    Ok(Ok(n)) if n > 0 => n,
+                    _ => return,
+                };
+                buf.truncate(n);
+
+                let Some(seg) = first_path_segment(&buf) else {
+                    let _ = respond_http(&mut stream, 400, "无法解析请求").await;
+                    return;
+                };
+                if seg.is_empty() || relay.client(&seg).is_none() {
+                    let _ = respond_http(
+                        &mut stream,
+                        404,
+                        "云链盘中继。地址格式：/<客户端名>/",
+                    )
+                    .await;
+                    return;
+                }
+                let event_tx = relay
+                    .sessions
+                    .lock()
+                    .await
+                    .get(&seg)
+                    .map(|sess| sess.event_tx.clone());
+                let Some(event_tx) = event_tx else {
+                    let _ = respond_http(&mut stream, 503, "该客户端当前不在线").await;
+                    return;
+                };
+                let replayed: BoxStream = Box::new(PrefixedStream {
+                    prefix: buf,
+                    pos: 0,
+                    inner: stream,
+                });
+                let _ = relay
+                    .dispatch_visitor(&seg, "path", replayed, peer, &event_tx)
+                    .await;
+            });
+        }
     }
 
     /// 把客户端回连的数据连接与在等的访客连接对接起来。
@@ -509,5 +639,95 @@ impl Relay {
             Err(e) => log::debug!("{peer} 的连接中断：{e}"),
         }
         Ok(())
+    }
+}
+
+/// 先回放已读缓冲、再透传底层流。路径路由为解析请求行消费掉的字节靠它补回去。
+struct PrefixedStream {
+    prefix: Vec<u8>,
+    pos: usize,
+    inner: BoxStream,
+}
+
+impl tokio::io::AsyncRead for PrefixedStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if self.pos < self.prefix.len() {
+            let n = (self.prefix.len() - self.pos).min(buf.remaining());
+            let start = self.pos;
+            buf.put_slice(&self.prefix[start..start + n]);
+            self.pos += n;
+            return std::task::Poll::Ready(Ok(()));
+        }
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for PrefixedStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        data: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, data)
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// 从 HTTP 请求首块里取 URL 首段：`GET /mac/a.txt HTTP/1.1` → `mac`。
+/// 解析失败（不是 HTTP、首行不完整）返回 None。
+fn first_path_segment(head: &[u8]) -> Option<String> {
+    let line_end = head.iter().position(|&b| b == b'\r' || b == b'\n')?;
+    let line = std::str::from_utf8(&head[..line_end]).ok()?;
+    let path = line.split(' ').nth(1)?;
+    let seg = path.strip_prefix('/')?
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("");
+    Some(seg.to_string())
+}
+
+/// 极简 HTTP 应答：路径路由自己面对浏览器时用（404/503 这类边界情形）。
+async fn respond_http(stream: &mut BoxStream, code: u16, body: &str) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let reason = match code {
+        400 => "Bad Request",
+        404 => "Not Found",
+        503 => "Service Unavailable",
+        _ => "OK",
+    };
+    let resp = format!(
+        "HTTP/1.1 {code} {reason}\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(resp.as_bytes()).await?;
+    stream.flush().await
+}
+
+#[cfg(test)]
+mod path_router_tests {
+    use super::first_path_segment;
+
+    #[test]
+    fn 请求行首段解析() {
+        assert_eq!(first_path_segment(b"GET /mac/a.txt HTTP/1.1\r\nHost: x\r\n").as_deref(), Some("mac"));
+        assert_eq!(first_path_segment(b"PUT /home HTTP/1.1\r\n").as_deref(), Some("home"));
+        assert_eq!(first_path_segment(b"GET /mac?json HTTP/1.1\r\n").as_deref(), Some("mac"));
+        assert_eq!(first_path_segment(b"GET / HTTP/1.1\r\n").as_deref(), Some(""));
+        assert_eq!(first_path_segment(b"\x16\x03\x01 tls"), None, "TLS 字节不是 HTTP");
     }
 }

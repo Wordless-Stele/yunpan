@@ -43,6 +43,9 @@ pub struct RelaySettings {
     /// 与中继之间走 TLS（中继配了证书就开着）。开着时访客侧就是正经 HTTPS，
     /// 客户端不需要任何证书文件。
     pub tls: bool,
+    /// 路径前缀模式：中继按「域名/客户端名/」分流时勾选。本机 dufs 以客户端 ID
+    /// 为路径前缀启动，页面内链接、二维码与公网地址自洽。
+    pub path_prefix: bool,
 }
 
 impl Default for AppConfig {
@@ -75,6 +78,7 @@ impl Default for RelaySettings {
             remote_port: 8080,
             // 默认开：正经部署中继都该有证书；内网联调再手动关
             tls: true,
+            path_prefix: false,
         }
     }
 }
@@ -128,6 +132,8 @@ impl AppConfig {
             allow_archive: bool,
             #[serde(skip_serializing_if = "Vec::is_empty")]
             auth: Vec<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            path_prefix: Option<String>,
         }
 
         let mut auth = vec![];
@@ -152,6 +158,11 @@ impl AppConfig {
             allow_search: self.allow_search,
             allow_archive: self.allow_archive,
             auth,
+            // 路径前缀模式：dufs 原生按前缀生成页面链接，中继按同名首段分流
+            path_prefix: (self.relay.enabled
+                && self.relay.path_prefix
+                && !self.relay.client_id.trim().is_empty())
+            .then(|| self.relay.client_id.trim().to_string()),
         };
         serde_yaml::to_string(&doc).expect("配置镜像结构必然可序列化")
     }
@@ -228,10 +239,28 @@ mod tests {
             token: "0123456789abcdef".into(),
             remote_port: 8080,
             tls: true,
+            path_prefix: false,
         };
         assert!(cfg.tunnel_config().unwrap().tls);
         cfg.relay.tls = false;
         assert!(!cfg.tunnel_config().unwrap().tls);
+    }
+
+    #[test]
+    fn 路径前缀模式下_yaml_带上客户端名做前缀() {
+        let mut cfg = AppConfig::default();
+        cfg.serve_path = std::env::temp_dir().to_string_lossy().to_string();
+        cfg.relay.enabled = true;
+        cfg.relay.client_id = "mac".into();
+        cfg.relay.path_prefix = true;
+        let yaml = cfg.to_dufs_yaml();
+        assert!(yaml.contains("path-prefix: mac"), "实际 YAML：\n{yaml}");
+        // dufs 解析后 uri_prefix 应为 /mac/
+        let args = dufs_core::Args::from_yaml(&yaml).unwrap();
+        assert_eq!(args.uri_prefix, "/mac/");
+        // 关掉开关就不带前缀
+        cfg.relay.path_prefix = false;
+        assert!(!cfg.to_dufs_yaml().contains("path-prefix"));
     }
 
     #[test]
@@ -263,6 +292,7 @@ mod tests {
             token: "0123456789abcdef".into(),
             remote_port: 8080,
             tls: true,
+            path_prefix: false,
         };
         let t = cfg.tunnel_config().expect("应当能生成隧道配置");
         assert_eq!(t.local_port, 5001);

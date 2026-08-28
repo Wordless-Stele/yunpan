@@ -87,8 +87,14 @@ fn load_config(path: &PathBuf) -> Result<RelayConfig> {
                 client.token.len()
             );
         }
-        if client.ports.is_empty() {
-            anyhow::bail!("客户端 {} 没有可用端口，它连上来也申请不到任何端口", client.id);
+        if client.ports.is_empty() && cfg.path_router_port.is_none() {
+            anyhow::bail!(
+                "客户端 {} 没有可用端口。要么给它端口白名单，要么开启 path_router_port 走路径路由",
+                client.id
+            );
+        }
+        if Some(cfg.control_port) == cfg.path_router_port {
+            anyhow::bail!("path_router_port 不能与控制端口相同");
         }
         if client.ports.contains(&cfg.control_port) {
             anyhow::bail!(

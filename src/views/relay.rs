@@ -148,6 +148,22 @@ pub fn RelayView() -> Element {
                 label { class: "check",
                     input {
                         r#type: "checkbox",
+                        checked: cfg().relay.path_prefix,
+                        onchange: move |e| {
+                            let mut c = cfg();
+                            c.relay.path_prefix = e.value().parse().unwrap_or(false);
+                            c.save();
+                            cfg.set(c);
+                        },
+                    }
+                    "路径前缀模式（访问地址为 中继域名/客户端名/）"
+                }
+            }
+            div { class: "field",
+                label { "" }
+                label { class: "check",
+                    input {
+                        r#type: "checkbox",
                         checked: cfg().relay.tls,
                         onchange: move |e| {
                             let mut c = cfg();
@@ -160,7 +176,8 @@ pub fn RelayView() -> Element {
                 }
             }
             p { class: "hint",
-                "公网端口为中继服务器上分配给本机的访客端口，须在中继端该客户端的端口白名单内；"
+                "路径前缀模式下由中继按客户端名分流，无需独立公网端口（修改后需重新启动共享）。"
+                "非路径模式时，公网端口为中继服务器上分配给本机的访客端口，须在中继端该客户端的端口白名单内；"
                 "经 nginx 反向代理部署时，访客地址以中继下发为准。"
                 "证书仅部署于中继服务器，本机无需任何证书文件。"
                 "若启用加密后始终无法连接，通常为中继服务器未配置证书，或服务器地址与证书域名不符。"

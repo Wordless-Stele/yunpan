@@ -64,6 +64,8 @@ async fn 从公网端口进的字节原样从本地服务回来() {
         public_host: None,
         tls_cert: None,
         tls_key: None,
+        path_router_port: None,
+        public_base_url: None,
         visitor_bind: None,
         visitor_tls: None,
         clients: vec![ClientAuth {
@@ -126,6 +128,8 @@ async fn 令牌错误的客户端会停在_fatal_而不是无限重试() {
         public_host: None,
         tls_cert: None,
         tls_key: None,
+        path_router_port: None,
+        public_base_url: None,
         visitor_bind: None,
         visitor_tls: None,
         clients: vec![ClientAuth {
@@ -195,6 +199,8 @@ async fn 开了_tls_后三段连接都加密且字节原样往返() {
         public_host: None,
         tls_cert: Some(cert_path),
         tls_key: Some(key_path),
+        path_router_port: None,
+        public_base_url: None,
         visitor_bind: None,
         visitor_tls: None,
         clients: vec![ClientAuth {
@@ -294,6 +300,8 @@ async fn 一台中继两个客户端各走各的端口互不串() {
         public_host: None,
         tls_cert: None,
         tls_key: None,
+        path_router_port: None,
+        public_base_url: None,
         visitor_bind: None,
         visitor_tls: None,
         clients: vec![
@@ -392,6 +400,8 @@ async fn 反代形态_访客明文进_隧道仍加密_地址用下发的() {
         public_host: None,
         tls_cert: Some(cert_path),
         tls_key: Some(key_path),
+        path_router_port: None,
+        public_base_url: None,
         visitor_bind: Some("127.0.0.1".parse().unwrap()),
         visitor_tls: Some(false),          // ← nginx 反代：访客端口明文
         clients: vec![ClientAuth {
@@ -438,4 +448,113 @@ async fn 反代形态_访客明文进_隧道仍加密_地址用下发的() {
 
     handle.stop().await;
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 路径路由：一个共享端口，/jia/ 与 /yi/ 各自到家；未知路径 404、离线客户端 503。
+/// 客户端白名单留空即免独立端口，展示地址由 base/<id>/ 生成。
+#[tokio::test(flavor = "multi_thread")]
+async fn 路径路由_按首段分流_未知404_离线503() {
+    let control_port = free_port();
+    let router_port = free_port();
+    let (local_a, local_b) = (free_port(), free_port());
+
+    async fn spawn_http_echo(port: u16, tag: &'static str) {
+        let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = listener.accept().await else { break };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 2048];
+                    let n = s.read(&mut buf).await.unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+                    let first = req.lines().next().unwrap_or("").to_string();
+                    let body = format!("{tag}|{first}");
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(), body
+                    );
+                    let _ = s.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+    }
+    spawn_http_echo(local_a, "甲").await;
+    spawn_http_echo(local_b, "乙").await;
+
+    let relay = Arc::new(Relay::new(RelayConfig {
+        bind: "127.0.0.1".parse().unwrap(),
+        control_port,
+        heartbeat_secs: 2,
+        public_host: None,
+        tls_cert: None,
+        tls_key: None,
+        path_router_port: Some(router_port),
+        public_base_url: Some("https://yp.example.com".into()),
+        visitor_bind: None,
+        visitor_tls: None,
+        clients: vec![
+            ClientAuth { id: "jia".into(), token: TOKEN.into(), ports: vec![], public_url: None },
+            ClientAuth { id: "yi".into(), token: "fedcba9876543210fedcba9876543210".into(), ports: vec![], public_url: None },
+            ClientAuth { id: "likai".into(), token: "99887766554433221100998877665544".into(), ports: vec![], public_url: None },
+        ],
+    }).unwrap());
+    tokio::spawn(relay.run());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let make = |id: &str, token: &str, local_port: u16| ClientConfig {
+        relay_host: "127.0.0.1".into(),
+        control_port,
+        client_id: id.into(),
+        token: token.into(),
+        name: "dufs".into(),
+        remote_port: 0,
+        local_port,
+        tls: false,
+        extra_trust_der: None,
+    };
+    let h_a = yunpan_tunnel::client::spawn(make("jia", TOKEN, local_a));
+    let h_b = yunpan_tunnel::client::spawn(make("yi", "fedcba9876543210fedcba9876543210", local_b));
+
+    // 上线且展示地址按 base/<id>/ 生成
+    for (handle, want) in [(&h_a, "https://yp.example.com/jia/"), (&h_b, "https://yp.example.com/yi/")] {
+        let mut status = handle.status.clone();
+        let url = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let RelayStatus::Online { public_url } = &*status.borrow() {
+                    break public_url.clone();
+                }
+                status.changed().await.unwrap();
+            }
+        }).await.expect("5 秒内没上线");
+        assert_eq!(url, want);
+    }
+
+    async fn http_get(port: u16, path: &str) -> String {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        s.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").as_bytes())
+            .await.unwrap();
+        let mut out = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut buf = [0u8; 2048];
+            loop {
+                match s.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => out.extend_from_slice(&buf[..n]),
+                }
+            }
+        }).await;
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    let resp = http_get(router_port, "/jia/hello.txt").await;
+    assert!(resp.contains("甲|GET /jia/hello.txt"), "甲的路由或回放坏了：{resp}");
+    let resp = http_get(router_port, "/yi/?json").await;
+    assert!(resp.contains("乙|GET /yi/?json"), "乙的路由坏了：{resp}");
+    let resp = http_get(router_port, "/nobody/x").await;
+    assert!(resp.contains("404"), "未知客户端应 404：{resp}");
+    let resp = http_get(router_port, "/likai/x").await;
+    assert!(resp.contains("503"), "离线客户端应 503：{resp}");
+
+    h_a.stop().await;
+    h_b.stop().await;
 }
