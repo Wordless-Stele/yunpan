@@ -1,8 +1,11 @@
 name: Build & Release
 
-# 推 v* 标签时构建并发布；Actions 页也可手动触发（只构建不发版）。
-# 写法沿用 ProxyZms 的 release.yml：原生 runner，不交叉编译——
-# ring / liblzma 这些 C 依赖在 Mac 上交叉编 MSVC 编不过，原生构建则没有此问题。
+# 三个产物，全部 x86_64：
+#   客户端 Linux   → ubuntu-22.04 托管 runner（22.04 的 glibc 老，deb/AppImage 能跑在更多发行版上）
+#   客户端 Windows → windows-latest 托管 runner（NSIS 安装包；ring/liblzma 必须原生编）
+#   中继 Linux     → 自建 runner（与生产机 8.155.35.38 的 glibc 兼容已被 parkwise 验证）
+# 推 v* 标签构建并发 Release；Actions 页手动触发只构建不发版。
+# 平时只更新中继用 build-relay.yml（自建 runner，零计费秒排队）。
 on:
   push:
     tags:
@@ -13,28 +16,18 @@ permissions:
   contents: write
 
 jobs:
-  desktop:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: windows-x64
-            os: windows-latest
-            platform: windows
-            package-types: nsis
-          - name: windows-arm64
-            os: windows-11-arm
-            platform: windows
-            package-types: nsis
-          - name: macos-arm64
-            os: macos-14
-            platform: macos
-            package-types: macos
-
+  client-linux-x64:
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
+
+      # Dioxus 桌面端在 Linux 上经 wry/tao 依赖 webkit2gtk 全家；托盘要 appindicator
+      - name: Install Linux desktop deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -42,7 +35,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.name }}
+          key: client-linux-x64
 
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@main
@@ -53,75 +46,91 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: cargo binstall dioxus-cli@0.7.10 -y --force --disable-strategies compile
 
+      # 质量闸门放在这一个 job 里跑一次即可（Windows 上跑一遍是重复花钱）
       - name: Test
         run: cargo test --workspace
 
-      - name: Bundle
-        run: dx bundle --release --platform ${{ matrix.platform }} --package-types ${{ matrix.package-types }}
+      - name: Bundle (deb + AppImage)
+        run: dx bundle --release --platform linux --package-types deb --package-types appimage
 
-      - name: Collect artifacts (Windows)
-        if: runner.os == 'Windows'
+      - name: Collect artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          deb=$(find target -name '*.deb' -path '*bundle*' | head -n1)
+          appimage=$(find target -iname '*.AppImage' -path '*bundle*' | head -n1)
+          [ -n "$deb" ] || { echo "::error::未找到 .deb 产物"; exit 1; }
+          cp "$deb" artifacts/yunpan-client-linux-x64.deb
+          [ -n "$appimage" ] && cp "$appimage" artifacts/yunpan-client-linux-x64.AppImage || echo "无 AppImage，跳过"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-linux-x64
+          path: artifacts/*
+
+  client-windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: client-windows-x64
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Dioxus CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo binstall dioxus-cli@0.7.10 -y --force --disable-strategies compile
+
+      - name: Bundle (NSIS)
+        run: dx bundle --release --platform windows --package-types nsis
+
+      - name: Collect artifacts
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts
           setup=$(find target -iname '*setup*.exe' -path '*bundle*' | head -n1)
-          if [ -z "$setup" ]; then echo "::error::未找到 NSIS 安装包"; exit 1; fi
-          cp "$setup" "artifacts/yunpan-${{ matrix.name }}-setup.exe"
-
-      - name: Collect artifacts (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p artifacts
-          app=$(find target -type d -name '*.app' -path '*bundle*' | head -n1)
-          if [ -z "$app" ]; then echo "::error::未找到 .app 产物"; exit 1; fi
-          # ad-hoc 签名：没有任何签名的 app 在 Apple Silicon 上显示「已损坏」
-          codesign --force --deep --sign - "$app"
-          staging=$(mktemp -d)
-          cp -R "$app" "$staging/"
-          ln -s /Applications "$staging/Applications"
-          hdiutil create -volname "云链盘" -srcfolder "$staging" -ov -format UDZO \
-            "artifacts/yunpan-${{ matrix.name }}.dmg"
+          [ -n "$setup" ] || { echo "::error::未找到 NSIS 安装包"; exit 1; }
+          cp "$setup" artifacts/yunpan-client-windows-x64-setup.exe
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
+          name: client-windows-x64
           path: artifacts/*
 
-  relay:
-    name: relay-linux-${{ matrix.arch }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x64
-            os: ubuntu-latest
-          - arch: arm64
-            os: ubuntu-24.04-arm
-
+  relay-linux-x64:
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: relay-${{ matrix.arch }}
-      - name: Build relay
+
+      # runner 以 systemd 服务跑，非登录 shell 不 source ~/.profile
+      - name: Expose local toolchains on PATH
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build
         run: cargo build --release -p yunpan-relay
-      - name: Collect
+
+      - name: Collect artifacts
         run: |
           mkdir -p artifacts
-          cp target/release/yunpan-relay "artifacts/yunpan-relay-linux-${{ matrix.arch }}"
+          cp target/release/yunpan-relay artifacts/yunpan-relay-linux-x64
+
       - uses: actions/upload-artifact@v4
         with:
-          name: relay-linux-${{ matrix.arch }}
+          name: relay-linux-x64
           path: artifacts/*
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [desktop, relay]
+    needs: [client-linux-x64, client-windows-x64, relay-linux-x64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
