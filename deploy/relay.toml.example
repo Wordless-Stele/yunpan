@@ -28,6 +28,7 @@ tls_key = "/etc/yunpan/privkey.pem"
 # 访客实际该用的地址。nginx 侧 proxy_pass http://127.0.0.1:<端口>，
 # 记得 client_max_body_size 0 + proxy_request_buffering off（大文件流式上传）。
 # visitor_bind = "127.0.0.1"
+# visitor_tls = false   # nginx 已在 443 终结 TLS，访客端口收明文
 
 # 每台要穿透的机器登记一条。令牌用 `yunpan-relay token` 生成。
 # ports 是该客户端允许申请的公网端口白名单——没有白名单的话，任何拿到令牌的

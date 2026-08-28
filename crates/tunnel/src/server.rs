@@ -54,6 +54,13 @@ pub struct RelayConfig {
     /// `127.0.0.1`——端口只对本机 nginx 可见，安全组一个访客端口都不用开。
     #[serde(default)]
     pub visitor_bind: Option<IpAddr>,
+    /// 访客端口是否套 TLS，缺省跟全局（配了证书就套）。经 nginx 反代时设 false：
+    /// nginx 在 443 终结了 TLS，转进来的是明文 HTTP，访客端口再等 TLS 握手
+    /// 就会把 nginx 的明文当坏 ClientHello 掐掉（症状：nginx 报
+    /// upstream sent no valid HTTP/1.0 header，访客拿到 502/000）。
+    /// 控制端口不受此开关影响，永远跟全局。
+    #[serde(default)]
+    pub visitor_tls: Option<bool>,
     pub clients: Vec<ClientAuth>,
 }
 
@@ -120,6 +127,9 @@ impl Relay {
             (None, None) => None,
             _ => bail!("tls_cert 和 tls_key 要么都给要么都不给"),
         };
+        if cfg.visitor_tls == Some(true) && acceptor.is_none() {
+            bail!("visitor_tls = true 但没配证书");
+        }
         Ok(Self {
             cfg,
             acceptor,
@@ -128,6 +138,15 @@ impl Relay {
             next_conn_id: AtomicU64::new(1),
             stats: Stats::default(),
         })
+    }
+
+    /// 访客端口版：visitor_tls 说了算，缺省跟全局。
+    async fn maybe_visitor_tls(&self, tcp: TcpStream) -> Result<BoxStream> {
+        let want_tls = self.cfg.visitor_tls.unwrap_or(self.acceptor.is_some());
+        if !want_tls {
+            return Ok(Box::new(tcp));
+        }
+        self.maybe_tls(tcp).await
     }
 
     /// 按配置给刚 accept 的连接套（或不套）TLS。带超时：TLS 握手挂着不动的连接
@@ -433,8 +452,9 @@ impl Relay {
                     },
                 };
 
-                // 访客那头也按同一开关走 TLS——配了证书就是正经 HTTPS 端口
-                let stream = match relay.maybe_tls(stream).await {
+                // 访客端口的 TLS 由 visitor_tls 决定（缺省跟全局）；
+                // nginx 反代形态下这里是明文，TLS 由 nginx 在 443 终结
+                let stream = match relay.maybe_visitor_tls(stream).await {
                     Ok(s) => s,
                     Err(e) => {
                         // 扫端口的机器人经常裸连 TLS 端口，握手失败是常态，debug 级即可

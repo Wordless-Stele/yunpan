@@ -65,6 +65,7 @@ async fn 从公网端口进的字节原样从本地服务回来() {
         tls_cert: None,
         tls_key: None,
         visitor_bind: None,
+        visitor_tls: None,
         clients: vec![ClientAuth {
             id: "test".into(),
             token: TOKEN.into(),
@@ -126,6 +127,7 @@ async fn 令牌错误的客户端会停在_fatal_而不是无限重试() {
         tls_cert: None,
         tls_key: None,
         visitor_bind: None,
+        visitor_tls: None,
         clients: vec![ClientAuth {
             id: "test".into(),
             token: TOKEN.into(),
@@ -194,6 +196,7 @@ async fn 开了_tls_后三段连接都加密且字节原样往返() {
         tls_cert: Some(cert_path),
         tls_key: Some(key_path),
         visitor_bind: None,
+        visitor_tls: None,
         clients: vec![ClientAuth {
             id: "test".into(),
             token: TOKEN.into(),
@@ -292,6 +295,7 @@ async fn 一台中继两个客户端各走各的端口互不串() {
         tls_cert: None,
         tls_key: None,
         visitor_bind: None,
+        visitor_tls: None,
         clients: vec![
             ClientAuth { id: "jia".into(), token: TOKEN.into(), ports: vec![port_a],
                          public_url: Some("https://pan.example.com".into()) },
@@ -356,4 +360,77 @@ async fn 一台中继两个客户端各走各的端口互不串() {
     h_rogue.stop().await;
     h_a.stop().await;
     h_b.stop().await;
+}
+
+/// nginx 反代形态：隧道 TLS、访客端口明文（nginx 在 443 终结 TLS 后明文转进来）、
+/// 展示地址由中继下发。三件事都对，浏览器才能经 nginx 打到客户端的 dufs。
+#[tokio::test(flavor = "multi_thread")]
+async fn 反代形态_访客明文进_隧道仍加密_地址用下发的() {
+    let control_port = free_port();
+    let remote_port = free_port();
+    let local_port = free_port();
+    spawn_echo(local_port).await;
+
+    let signed = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let dir = std::env::temp_dir().join(format!("yunpan-rp-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cert_path = dir.join("cert.pem");
+    let key_path = dir.join("key.pem");
+    std::fs::write(&cert_path, signed.cert.pem()).unwrap();
+    std::fs::write(&key_path, signed.key_pair.serialize_pem()).unwrap();
+    let cert_der = signed.cert.der().to_vec();
+
+    let relay = Arc::new(Relay::new(RelayConfig {
+        bind: "127.0.0.1".parse().unwrap(),
+        control_port,
+        heartbeat_secs: 2,
+        public_host: None,
+        tls_cert: Some(cert_path),
+        tls_key: Some(key_path),
+        visitor_bind: Some("127.0.0.1".parse().unwrap()),
+        visitor_tls: Some(false),          // ← nginx 反代：访客端口明文
+        clients: vec![ClientAuth {
+            id: "test".into(),
+            token: TOKEN.into(),
+            ports: vec![remote_port],
+            public_url: Some("https://pan.example.com".into()),
+        }],
+    }).unwrap());
+    tokio::spawn(relay.run());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let handle = yunpan_tunnel::client::spawn(ClientConfig {
+        relay_host: "localhost".into(),
+        control_port,
+        client_id: "test".into(),
+        token: TOKEN.into(),
+        name: "dufs".into(),
+        remote_port,
+        local_port,
+        tls: true,                         // 隧道照旧加密
+        extra_trust_der: Some(cert_der),
+    });
+
+    let mut status = handle.status.clone();
+    let url = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let RelayStatus::Online { public_url } = &*status.borrow() {
+                break public_url.clone();
+            }
+            status.changed().await.unwrap();
+        }
+    }).await.expect("5 秒内没上线");
+    assert_eq!(url, "https://pan.example.com");
+
+    // 访客（扮演 nginx）：明文直连访客端口，字节原样往返
+    let mut visitor = TcpStream::connect(("127.0.0.1", remote_port)).await.unwrap();
+    let payload = "明文经反代进隧道".as_bytes();
+    visitor.write_all(payload).await.unwrap();
+    let mut got = vec![0u8; payload.len()];
+    tokio::time::timeout(Duration::from_secs(5), visitor.read_exact(&mut got))
+        .await.expect("5 秒没回声").unwrap();
+    assert_eq!(got, payload);
+
+    handle.stop().await;
+    let _ = std::fs::remove_dir_all(&dir);
 }
