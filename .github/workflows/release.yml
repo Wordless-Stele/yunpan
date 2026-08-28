@@ -110,13 +110,19 @@ jobs:
           path: artifacts/*
 
   relay-linux-x64:
-    runs-on: [self-hosted, Linux, X64]
+    # 托管 runner（ubuntu-latest = 24.04，glibc 2.39 与生产机 Ubuntu 24.04 一致）。
+    # 平时快速出中继包仍可用 build-relay.yml（自建 runner，零计费）
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
-      # runner 以 systemd 服务跑，非登录 shell 不 source ~/.profile
-      - name: Expose local toolchains on PATH
-        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: relay-linux-x64
 
       - name: Build
         run: cargo build --release -p yunpan-relay
