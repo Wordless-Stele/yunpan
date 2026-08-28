@@ -46,16 +46,16 @@ pub fn ShareView() -> Element {
                 // 中继状态徽章：一眼看到公网通没通，点击跳中继页
                 {
                     let (chip_cls, chip_txt): (&str, String) = if !cfg().relay.enabled {
-                        ("chip", "中继 未启用".into())
+                        ("chip", "中继服务器未启用".into())
                     } else {
                         match relay_state() {
-                            RelayStatus::Idle => ("chip", "中继 待命".into()),
-                            RelayStatus::Connecting => ("chip busy", "中继 连接中".into()),
-                            RelayStatus::Online { .. } => ("chip on", "中继 已打通".into()),
+                            RelayStatus::Idle => ("chip", "中继服务器待命".into()),
+                            RelayStatus::Connecting => ("chip busy", "连接中继服务器…".into()),
+                            RelayStatus::Online { .. } => ("chip on", "中继服务器正常".into()),
                             RelayStatus::Retrying { attempt, .. } => {
-                                ("chip busy", format!("中继 重连中 {attempt}"))
+                                ("chip busy", format!("中继服务器重连中 {attempt}"))
                             }
-                            RelayStatus::Fatal { .. } => ("chip err", "中继 失败".into()),
+                            RelayStatus::Fatal { .. } => ("chip err", "中继服务器异常".into()),
                         }
                     };
                     rsx! {
