@@ -17,7 +17,10 @@ permissions:
 
 jobs:
   client-linux-x64:
-    runs-on: ubuntu-22.04
+    # 22.04 的 glibc(2.35) 跑不动 binstall 的 dx 预编译二进制（要 2.39），
+    # 而 dx 源码编译因 rhai 依赖必挂（ProxyZms 踩过）——只能用 24.04。
+    # 代价：deb/AppImage 需要 glibc>=2.39（Ubuntu 24.04+/Debian 13+/较新 Fedora）
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
